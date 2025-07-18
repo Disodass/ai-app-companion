@@ -360,6 +360,11 @@ export default function Settings() {
   return (
     <Box sx={{ minHeight: '100vh', background: theme.palette.background.default, py: 4 }}>
       <HamburgerMenu onSignOut={async () => { await signOut(); navigate('/'); }} />
+      <Box sx={{ textAlign: 'center', mb: 4 }}>
+        <img src="/bestibule-logo.png" alt="Bestibule Logo" style={{height: 48, marginBottom: 8}} />
+        <Typography variant="h5" sx={{ color: '#8B4A43', fontWeight: 'bold' }}>Bestibule</Typography>
+        <Typography variant="subtitle2" sx={{ color: '#8B4A43', letterSpacing: 1 }}>BEST OF YOU</Typography>
+      </Box>
       <Container maxWidth="md">
         <Typography variant="h4" gutterBottom sx={{ mb: 4, textAlign: 'center' }}>
           Settings
