@@ -6,20 +6,23 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy": "npm run build && firebase deploy --only hosting",
+    "deploy:project": "npm run build && firebase deploy --only hosting --project ai-app-companion"
   },
   "dependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "firebase": "^10.0.0",
-    "@mui/material": "^5.15.0",
-    "@mui/icons-material": "^5.15.0",
     "@emotion/react": "^11.11.0",
     "@emotion/styled": "^11.11.0",
+    "@mui/icons-material": "^5.15.0",
+    "@mui/material": "^5.15.0",
+    "firebase": "^10.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
     "react-router-dom": "^6.22.0"
   },
   "devDependencies": {
-    "vite": "^4.5.0",
-    "@vitejs/plugin-react": "^4.0.0"
+    "@vitejs/plugin-react": "^4.0.0",
+    "firebase-tools": "^14.14.0",
+    "vite": "^4.5.0"
   }
-} 
+}
