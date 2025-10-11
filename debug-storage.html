@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug LocalStorage</title>
+</head>
+<body>
+    <h1>LocalStorage Debug</h1>
+    <div id="output"></div>
+    <script>
+        console.log('=== LOCALSTORAGE DEBUG ===');
+        
+        // Get all keys
+        const keys = Object.keys(localStorage);
+        console.log('All keys:', keys);
+        
+        // Find chat-related keys
+        const chatKeys = keys.filter(key => 
+            key.includes('chat') || 
+            key.includes('message') || 
+            key.includes('conversation') ||
+            key.includes('history')
+        );
+        console.log('Chat-related keys:', chatKeys);
+        
+        // Check each key
+        chatKeys.forEach(key => {
+            try {
+                const data = localStorage.getItem(key);
+                const parsed = JSON.parse(data);
+                console.log(`Key: ${key}`);
+                console.log(`Type: ${typeof parsed}`);
+                console.log(`Length: ${Array.isArray(parsed) ? parsed.length : 'Not an array'}`);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    console.log(`First message:`, parsed[0]);
+                    console.log(`Last message:`, parsed[parsed.length - 1]);
+                }
+                console.log('---');
+            } catch (error) {
+                console.log(`Key: ${key} - Error: ${error.message}`);
+            }
+        });
+        
+        // Display in page
+        document.getElementById('output').innerHTML = `
+            <h2>Found ${chatKeys.length} chat-related keys:</h2>
+            <ul>
+                ${chatKeys.map(key => `<li><strong>${key}</strong>: ${localStorage.getItem(key) ? 'Has data' : 'Empty'}</li>`).join('')}
+            </ul>
+        `;
+    </script>
+</body>
+</html>

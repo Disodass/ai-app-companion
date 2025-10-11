@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Find Your 200+ Message History</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; }
+        .log { background: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 4px; font-family: monospace; }
+        .error { background: #f8d7da; color: #721c24; }
+        .success { background: #d4edda; color: #155724; }
+        .warning { background: #fff3cd; color: #856404; }
+        button { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; margin: 5px; }
+        button:hover { background: #0056b3; }
+    </style>
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getFirestore, collection, query, where, getDocs, orderBy, limit } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+        import { getAuth } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+
+        const app = initializeApp({
+            apiKey: "AIzaSyDueAy790_hFW6Aye2FYghRge6FOlRryFw",
+            authDomain: "ai-app-companion.firebaseapp.com",
+            projectId: "ai-app-companion",
+            storageBucket: "ai-app-companion.firebasestorage.app",
+            messagingSenderId: "506059414782",
+            appId: "1:506059414782:web:70977d87fdd280f05b59af",
+        });
+
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        function log(message, type = 'log') {
+            const div = document.createElement('div');
+            div.className = `log ${type}`;
+            div.textContent = message;
+            document.getElementById('output').appendChild(div);
+            console.log(message);
+        }
+
+        async function findYourHistory() {
+            try {
+                const user = auth.currentUser;
+                if (!user) {
+                    log('❌ No user signed in. Please sign in to the main app first.', 'error');
+                    return;
+                }
+                
+                log(`🔍 Looking for conversations for user: ${user.uid}`);
+                
+                // 1. Check all conversations where user is a member
+                log('📊 Checking conversations where you are a member...');
+                const conversationsRef = collection(db, 'conversations');
+                const userConversationsQuery = query(
+                    conversationsRef,
+                    where('members', 'array-contains', user.uid),
+                    orderBy('updatedAt', 'desc')
+                );
+                
+                const userSnapshot = await getDocs(userConversationsQuery);
+                log(`Found ${userSnapshot.size} conversations where you are a member:`);
+                
+                let maxMessages = 0;
+                let bestConversation = null;
+                
+                for (const doc of userSnapshot.docs) {
+                    const data = doc.data();
+                    const messageCount = data.messageCount || 0;
+                    log(`📁 ${doc.id}: ${messageCount} messages (updated: ${data.updatedAt?.toDate?.() || 'Unknown'})`);
+                    
+                    if (messageCount > maxMessages) {
+                        maxMessages = messageCount;
+                        bestConversation = { id: doc.id, count: messageCount };
+                    }
+                }
+                
+                if (bestConversation) {
+                    log(`✅ Best conversation: ${bestConversation.id} with ${bestConversation.count} messages`, 'success');
+                }
+                
+                // 2. Check for messages in a different collection structure
+                log('🔍 Checking for messages in root "messages" collection...');
+                try {
+                    const rootMessagesRef = collection(db, 'messages');
+                    const rootMessagesQuery = query(
+                        rootMessagesRef,
+                        where('authorId', '==', user.uid),
+                        orderBy('createdAt', 'desc'),
+                        limit(10)
+                    );
+                    
+                    const rootMessagesSnapshot = await getDocs(rootMessagesQuery);
+                    log(`Found ${rootMessagesSnapshot.size} messages in root "messages" collection`);
+                    
+                    if (rootMessagesSnapshot.size > 0) {
+                        log('Recent messages from root collection:', 'warning');
+                        rootMessagesSnapshot.docs.forEach((doc, i) => {
+                            const data = doc.data();
+                            log(`   ${i+1}. ${data.text?.substring(0, 50)}... (${data.createdAt?.toDate?.()})`);
+                        });
+                    }
+                } catch (error) {
+                    log(`Root messages check failed: ${error.message}`);
+                }
+                
+                // 3. Check for conversations with high message counts (regardless of membership)
+                log('🔍 Checking ALL conversations for high message counts...');
+                try {
+                    const allConversationsQuery = query(
+                        conversationsRef,
+                        orderBy('messageCount', 'desc'),
+                        limit(20)
+                    );
+                    
+                    const allSnapshot = await getDocs(allConversationsQuery);
+                    log(`Found ${allSnapshot.size} conversations total (top 20 by message count):`);
+                    
+                    for (const doc of allSnapshot.docs) {
+                        const data = doc.data();
+                        const messageCount = data.messageCount || 0;
+                        const isMember = data.members?.includes(user.uid) || false;
+                        log(`📁 ${doc.id}: ${messageCount} messages ${isMember ? '(YOU ARE A MEMBER)' : '(not a member)'}`);
+                        
+                        if (messageCount >= 200 && !isMember) {
+                            log(`🚨 FOUND IT! Conversation ${doc.id} has ${messageCount} messages but you're not a member!`, 'warning');
+                        }
+                    }
+                } catch (error) {
+                    log(`All conversations check failed: ${error.message}`);
+                }
+                
+                // 4. Summary
+                log('\n📋 SUMMARY:', 'success');
+                if (maxMessages >= 200) {
+                    log(`✅ Found your 200+ message history in conversation: ${bestConversation.id}`, 'success');
+                } else if (maxMessages > 0) {
+                    log(`⚠️  Only found ${maxMessages} messages. Your 200+ message history might be in a different conversation or collection.`, 'warning');
+                } else {
+                    log(`❌ No conversations found. Your history might be in a different database or collection.`, 'error');
+                }
+                
+            } catch (error) {
+                log(`❌ Error: ${error.message}`, 'error');
+                console.error(error);
+            }
+        }
+
+        // Auto-run when page loads
+        window.addEventListener('load', () => {
+            setTimeout(findYourHistory, 2000); // Wait for auth to initialize
+        });
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Find Your 200+ Message History</h1>
+        <p>This tool will search for your chat history across all possible locations.</p>
+        <p><strong>Make sure you're signed in to the main app first!</strong></p>
+        
+        <button onclick="findYourHistory()">🔍 Search Again</button>
+        <button onclick="location.reload()">🔄 Refresh Page</button>
+        
+        <div id="output"></div>
+    </div>
+</body>
+</html>

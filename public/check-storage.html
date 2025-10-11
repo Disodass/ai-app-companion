@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LocalStorage Inspector</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      max-width: 1200px;
+      margin: 20px auto;
+      padding: 0 20px;
+      background: #f5f5f5;
+    }
+    h1 {
+      color: #333;
+    }
+    .key-item {
+      background: white;
+      padding: 15px;
+      margin: 10px 0;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .key-name {
+      font-weight: bold;
+      color: #2563eb;
+      margin-bottom: 8px;
+    }
+    .key-info {
+      color: #666;
+      font-size: 14px;
+      margin: 5px 0;
+    }
+    .key-preview {
+      background: #f8f8f8;
+      padding: 10px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12px;
+      max-height: 200px;
+      overflow: auto;
+      margin-top: 10px;
+    }
+    .highlight {
+      background: #fef3c7;
+      border-left: 4px solid #f59e0b;
+    }
+    .stats {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔍 LocalStorage Inspector</h1>
+  
+  <div class="stats" id="stats"></div>
+  <div id="keys"></div>
+
+  <script>
+    function inspectLocalStorage() {
+      const keys = Object.keys(localStorage);
+      const statsEl = document.getElementById('stats');
+      const keysEl = document.getElementById('keys');
+      
+      let totalSize = 0;
+      let messageArrays = [];
+      
+      statsEl.innerHTML = `<h2>Total Keys: ${keys.length}</h2>`;
+      
+      keys.forEach(key => {
+        const value = localStorage.getItem(key);
+        const size = new Blob([value]).size;
+        totalSize += size;
+        
+        let parsed = null;
+        let isArray = false;
+        let arrayLength = 0;
+        
+        try {
+          parsed = JSON.parse(value);
+          isArray = Array.isArray(parsed);
+          arrayLength = isArray ? parsed.length : 0;
+          
+          if (arrayLength > 0) {
+            messageArrays.push({ key, length: arrayLength, parsed });
+          }
+        } catch (e) {
+          // Not JSON
+        }
+        
+        const keyDiv = document.createElement('div');
+        keyDiv.className = 'key-item' + (arrayLength > 50 ? ' highlight' : '');
+        
+        keyDiv.innerHTML = `
+          <div class="key-name">${key}</div>
+          <div class="key-info">Size: ${(size / 1024).toFixed(2)} KB</div>
+          ${isArray ? `<div class="key-info">Array Length: ${arrayLength} items</div>` : ''}
+          ${arrayLength > 0 ? `
+            <div class="key-info">Sample item: ${JSON.stringify(parsed[0])}</div>
+          ` : ''}
+          <div class="key-preview">${value.substring(0, 500)}${value.length > 500 ? '...' : ''}</div>
+        `;
+        
+        keysEl.appendChild(keyDiv);
+      });
+      
+      statsEl.innerHTML += `
+        <p><strong>Total Storage:</strong> ${(totalSize / 1024).toFixed(2)} KB</p>
+        <p><strong>Arrays Found:</strong> ${messageArrays.length}</p>
+        ${messageArrays.length > 0 ? `
+          <h3>Largest Arrays:</h3>
+          <ul>
+            ${messageArrays.sort((a,b) => b.length - a.length).slice(0, 5).map(arr => 
+              `<li><strong>${arr.key}</strong>: ${arr.length} items</li>`
+            ).join('')}
+          </ul>
+        ` : ''}
+      `;
+    }
+    
+    inspectLocalStorage();
+  </script>
+</body>
+</html> 
