@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 
 export default function SignIn() {
@@ -9,6 +9,10 @@ export default function SignIn() {
   const [loading, setLoading] = useState(false)
   const { signIn } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
+  
+  // Get the page they were trying to access before signing in
+  const from = location.state?.from?.pathname || '/home'
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -18,7 +22,7 @@ export default function SignIn() {
     const result = await signIn(email, password)
     
     if (result.success) {
-      navigate('/home')
+      navigate(from, { replace: true })
     } else {
       setError(result.error)
     }

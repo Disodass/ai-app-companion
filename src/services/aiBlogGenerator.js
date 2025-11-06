@@ -5,14 +5,22 @@ import { getSupporterById } from '../data/supporters'
 /**
  * Generate a blog post using AI based on supporter personality
  */
-export async function generateAIBlogPost(supporterId, topic, format = 'random') {
+export async function generateAIBlogPost(supporterId, topic, format = 'random', continueFromPost = null) {
   const supporter = getSupporterById(supporterId)
   
-  if (!supporter || !supporter.voiceGuide) {
-    throw new Error('Supporter not found or missing voice guide')
+  if (!supporter) {
+    throw new Error('Supporter not found')
   }
-
-  const { voiceGuide } = supporter
+  
+  // Create a default voice guide if missing
+  const voiceGuide = supporter.voiceGuide || {
+    tone: 'Supportive and helpful',
+    linguisticTics: ['I understand', 'Let\'s explore this', 'What I\'m noticing is', 'How does this feel for you?'],
+    boundaries: 'Supportive companion focused on your wellbeing',
+    openingMoves: ['What\'s on your mind today?', 'How are you feeling about this?', 'What would be most helpful to explore?'],
+    closers: ['What feels most important right now?', 'How can I best support you?', 'What\'s one thing you could try?'],
+    blogStyle: 'Warm, accessible writing that offers gentle insights and practical support'
+  }
   
   // Choose format if random
   const selectedFormat = format === 'random' 
@@ -20,7 +28,7 @@ export async function generateAIBlogPost(supporterId, topic, format = 'random') 
     : format
 
   // Build the prompt based on format
-  const prompt = buildPrompt(supporter, topic, selectedFormat, voiceGuide)
+  const prompt = buildPrompt(supporter, topic, selectedFormat, voiceGuide, continueFromPost)
   
   // Generate the blog post using Groq AI
   try {
@@ -97,7 +105,7 @@ IMPORTANT:
 /**
  * Build the specific prompt for the blog post
  */
-function buildPrompt(supporter, topic, format, voiceGuide) {
+function buildPrompt(supporter, topic, format, voiceGuide, continueFromPost = null) {
   const formatPrompts = {
     reflection: `Write a reflective blog post about "${topic}". Share your thoughts on why this matters, what you've noticed, and invite readers to reflect on their own experience with ${topic}.`,
     
@@ -110,7 +118,27 @@ function buildPrompt(supporter, topic, format, voiceGuide) {
     list: `Write a list-style blog post: "5 Things I've Learned About ${topic}". Make each point specific and meaningful, drawing on your personality as ${supporter.name}.`
   }
 
-  return formatPrompts[format] || formatPrompts.reflection
+  let basePrompt = formatPrompts[format] || formatPrompts.reflection
+
+  // If continuing from a previous post, modify the prompt
+  if (continueFromPost) {
+    const previousTitle = continueFromPost.title
+    const previousExcerpt = continueFromPost.excerpt
+    
+    basePrompt = `Write a follow-up blog post that continues the conversation from your previous post "${previousTitle}". 
+
+Your previous post was about: ${previousExcerpt}
+
+Now write a new post about "${topic}" that builds on this previous work. You could:
+- Expand on a specific aspect you mentioned before
+- Share new insights or developments since then  
+- Address questions that might have come up
+- Take the topic in a new but related direction
+
+Make it feel like a natural continuation of your ongoing conversation with readers, not a completely separate topic.`
+  }
+
+  return basePrompt
 }
 
 /**

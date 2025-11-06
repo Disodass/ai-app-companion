@@ -70,7 +70,7 @@ export default function DraftsList({ drafts, onPostDeleted, onPostEdited, isPubl
 
                 {/* Excerpt */}
                 <p className="text-theme-text-secondary mb-4 line-clamp-2">
-                  {post.excerpt}
+                  {post.excerpt?.replace(/\\n/g, '\n') || 'No excerpt available'}
                 </p>
 
                 {/* Meta Info */}

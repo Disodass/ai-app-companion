@@ -1,24 +1,89 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Users can read and write their own user document
-    match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-    }
-    
-    // Newsletter signups - anyone can create, only admins can read
-    match /newsletter/{email} {
-      allow create: if true;  // Public signup
-      allow read, update, delete: if false;  // Only via admin SDK
-    }
-    
-    // Temporary permissive rules for debugging
+
     match /conversations/{conversationId} {
-      allow read, write: if request.auth != null;
-      
+      // Allow list queries (where clause handles filtering)
+      allow list:   if request.auth != null;
+      // Allow get on specific docs only if member
+      allow get:    if isMemberConvDoc();
+      allow create: if request.auth != null && isValidConversationCreate();
+      allow update: if request.auth != null && isMemberConvDoc() && isValidConversationUpdate();
+      allow delete: if false;
+
       match /messages/{messageId} {
-        allow read, write: if request.auth != null;
+        // for message docs we must check the parent conversation
+        allow read:   if isMemberFromParent(conversationId);
+        allow create: if request.auth != null && isMemberFromParent(conversationId) && validMessageCreate();
+        allow update: if request.auth != null && isMemberFromParent(conversationId) && validMessageUpdate();
+        allow delete: if false;
       }
+
+      match /presence/{userId} {
+        allow read:  if isMemberFromParent(conversationId);
+        allow write: if request.auth != null && request.auth.uid == userId && isMemberFromParent(conversationId);
+      }
+
+      // ---- helpers ----
+      function isMemberConvDoc() {
+        return request.auth != null
+          && resource.data.members is list
+          && resource.data.members.hasAny([request.auth.uid]);
+      }
+      function isMemberFromParent(conversationId) {
+        return request.auth != null
+          && get(/databases/$(database)/documents/conversations/$(conversationId))
+               .data.members.hasAny([request.auth.uid]);
+      }
+
+      function isValidConversationCreate() {
+        return request.resource.data.keys().hasOnly([
+          "createdAt","updatedAt","members","memberMeta","lastMessage","messageCount"
+        ])
+        && request.resource.data.members is list
+        && request.resource.data.members.size() >= 1
+        && request.resource.data.members.size() <= 20
+        && request.resource.data.members.hasAny([request.auth.uid]);
+      }
+
+      function isValidConversationUpdate() {
+        return request.resource.data.diff(resource.data).changedKeys().hasOnly(
+          ["updatedAt","lastMessage","messageCount","memberMeta"]
+        );
+      }
+
+      function validMessageCreate() {
+        return request.resource.data.keys().hasOnly(["text","authorId","createdAt","status","meta"])
+          && request.resource.data.authorId == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.status in ["sending","sent","error"];
+      }
+
+      function validMessageUpdate() {
+        return request.resource.data.keys().hasOnly(["status"])
+          && resource.data.status == "sending"
+          && request.resource.data.status in ["sent","error"];
+      }
+    }
+
+    // Newsletter subscribers collection - allow public writes for subscription
+    match /newsletter_subscribers/{document} {
+      allow create: if true; // Allow anyone to subscribe
+      allow read: if request.auth != null; // Only authenticated users can read
+      allow update, delete: if request.auth != null; // Allow authenticated users to update/delete
+    }
+
+    // Email inbox collection - admin only
+    match /email_inbox/{document} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Email campaigns collection - allow public writes for tracking
+    match /email_campaigns/{document} {
+      allow create: if true; // Allow public creation for tracking
+      allow read: if request.auth != null; // Only authenticated users can read
+      allow update, delete: if request.auth != null; // Only authenticated users can update/delete
     }
   }
 }

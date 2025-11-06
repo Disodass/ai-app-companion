@@ -1,22 +1,28 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDarkMode } from '../contexts/DarkModeContext'
+import { getPublishedPosts } from '../services/blogService.js'
 
 export default function Blog() {
   const navigate = useNavigate()
   const { darkMode, toggleDarkMode } = useDarkMode()
+  const [blogPosts, setBlogPosts] = useState([])
+  const [loading, setLoading] = useState(true)
 
-  // Placeholder blog posts - you'll add real ones later
-  const blogPosts = [
-    {
-      id: 1,
-      title: "Welcome to Bestibule",
-      excerpt: "We're building something special - a space for gentle guidance and thoughtful support.",
-      date: "October 9, 2025",
-      author: "Supporter Friend",
-      category: "Updates"
+  useEffect(() => {
+    loadBlogPosts()
+  }, [])
+
+  const loadBlogPosts = async () => {
+    try {
+      const posts = await getPublishedPosts()
+      setBlogPosts(posts)
+    } catch (error) {
+      console.error('Error loading blog posts:', error)
+    } finally {
+      setLoading(false)
     }
-  ]
+  }
 
   return (
     <div className="min-h-screen bg-theme-primary flex flex-col">
@@ -56,47 +62,57 @@ export default function Blog() {
           </p>
 
           {/* Blog Posts */}
-          <div className="space-y-8">
-            {blogPosts.map(post => (
-              <article 
-                key={post.id} 
-                className="bg-theme-surface border border-theme-border rounded-lg p-6 hover:border-brand-primary transition-colors cursor-pointer"
-              >
-                <div className="flex items-center space-x-2 text-sm text-theme-text-muted mb-3">
-                  <span className="bg-brand-primary/20 text-brand-primary px-2 py-1 rounded">
-                    {post.category}
-                  </span>
-                  <span>•</span>
-                  <span>{post.date}</span>
-                  <span>•</span>
-                  <span>{post.author}</span>
+          {loading ? (
+            <div className="space-y-8">
+              {[...Array(3)].map((_, i) => (
+                <div key={i} className="bg-theme-surface border border-theme-border rounded-lg p-6 animate-pulse">
+                  <div className="h-4 bg-gray-200 rounded w-1/4 mb-3"></div>
+                  <div className="h-6 bg-gray-200 rounded w-3/4 mb-3"></div>
+                  <div className="h-4 bg-gray-200 rounded w-full mb-2"></div>
+                  <div className="h-4 bg-gray-200 rounded w-2/3"></div>
                 </div>
-                <h2 className="text-2xl font-bold text-theme-text mb-3">
-                  {post.title}
-                </h2>
-                <p className="text-theme-text-secondary">
-                  {post.excerpt}
-                </p>
-              </article>
-            ))}
-          </div>
-
-          {/* Coming Soon Message */}
-          <div className="mt-12 text-center bg-theme-surface border border-theme-border rounded-lg p-8">
-            <span className="text-4xl mb-4 block">✨</span>
-            <h3 className="text-2xl font-bold text-theme-text mb-3">
-              More Coming Soon
-            </h3>
-            <p className="text-theme-text-secondary mb-6">
-              We're preparing thoughtful content from our supporters. Join our newsletter to be notified when new posts arrive.
-            </p>
-            <button
-              onClick={() => navigate('/landing')}
-              className="bg-brand-primary text-white px-6 py-3 rounded-lg font-semibold hover:opacity-90 transition-opacity"
-            >
-              Join Newsletter
-            </button>
-          </div>
+              ))}
+            </div>
+          ) : blogPosts.length > 0 ? (
+            <div className="space-y-8">
+              {blogPosts.map(post => (
+                <article 
+                  key={post.id} 
+                  className="bg-theme-surface border border-theme-border rounded-lg p-6 hover:border-brand-primary transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center space-x-2 text-sm text-theme-text-muted mb-3">
+                    <span className="bg-brand-primary/20 text-brand-primary px-2 py-1 rounded">
+                      {post.supporterName}
+                    </span>
+                    <span>•</span>
+                    <span>{post.publishedAt?.toDate?.()?.toLocaleDateString() || 'Recent'}</span>
+                  </div>
+                  <h2 className="text-2xl font-bold text-theme-text mb-3">
+                    {post.title}
+                  </h2>
+                  <p className="text-theme-text-secondary">
+                    {post.excerpt || post.content?.substring(0, 200) + '...'}
+                  </p>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center bg-theme-surface border border-theme-border rounded-lg p-8">
+              <span className="text-4xl mb-4 block">✨</span>
+              <h3 className="text-2xl font-bold text-theme-text mb-3">
+                More Coming Soon
+              </h3>
+              <p className="text-theme-text-secondary mb-6">
+                We're preparing thoughtful content from our supporters. Join our newsletter to be notified when new posts arrive.
+              </p>
+              <button
+                onClick={() => navigate('/landing')}
+                className="bg-brand-primary text-white px-6 py-3 rounded-lg font-semibold hover:opacity-90 transition-opacity"
+              >
+                Join Newsletter
+              </button>
+            </div>
+          )}
         </div>
       </main>
 

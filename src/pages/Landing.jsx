@@ -18,12 +18,48 @@ export default function Landing() {
     setError('')
 
     try {
-      // Save email to Firestore
-      await addDoc(collection(db, 'newsletter'), {
-        email: email.trim().toLowerCase(),
+      const emailLower = email.trim().toLowerCase()
+      
+      console.log('📝 Saving subscriber to Firestore:', emailLower)
+      
+      // Save email to Firestore (use the same collection name as the admin panel)
+      const docRef = await addDoc(collection(db, 'newsletter_subscribers'), {
+        email: emailLower,
         subscribedAt: serverTimestamp(),
-        status: 'active'
+        status: 'active',
+        individualBlog: true,
+        weeklyRecap: true,
+        weeklyPreview: true
       })
+      
+      console.log('✅ Subscriber saved successfully:', docRef.id)
+      console.log('🔄 About to send welcome email...')
+      
+      // Send welcome email via the secure Cloud Function  
+      console.log('🔄 Attempting to send welcome email...')
+      
+      try {
+        console.log('📧 About to import welcome service...')
+        
+        // Import the welcome email service
+        const welcomeService = await import('../services/welcomeSequenceService')
+        console.log('✅ Welcome service imported successfully')
+        console.log('Welcome service keys:', Object.keys(welcomeService))
+        
+        if (!welcomeService.sendWelcomeEmail) {
+          throw new Error('sendWelcomeEmail function not found in imported module')
+        }
+        
+        console.log('📧 Calling sendWelcomeEmail...')
+        await welcomeService.sendWelcomeEmail(emailLower)
+        
+        console.log('✅ Welcome email sent successfully')
+      } catch (emailError) {
+        console.error('⚠️ Error sending welcome email:', emailError)
+        console.error('Error message:', emailError.message)
+        console.error('Error stack:', emailError.stack)
+        // Don't fail the signup if email fails - subscriber is already saved
+      }
       
       setSuccess(true)
       setEmail('')
@@ -31,8 +67,8 @@ export default function Landing() {
       // Reset success message after 5 seconds
       setTimeout(() => setSuccess(false), 5000)
     } catch (err) {
-      console.error('Newsletter signup error:', err)
-      setError('Something went wrong. Please try again.')
+      console.error('❌ Newsletter signup error:', err)
+      setError('Something went wrong. Please try again. Error: ' + err.message)
     } finally {
       setLoading(false)
     }

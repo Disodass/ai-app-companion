@@ -70,17 +70,15 @@ export async function getBlogPost(postId) {
 export async function getDraftPosts() {
   try {
     const postsRef = collection(db, BLOG_POSTS_COLLECTION)
-    const q = query(
-      postsRef,
-      where('status', '==', 'draft'),
-      orderBy('createdAt', 'desc')
-    )
+    const querySnapshot = await getDocs(postsRef)
     
-    const querySnapshot = await getDocs(q)
-    return querySnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    }))
+    // Filter drafts in memory (avoids needing index)
+    const drafts = querySnapshot.docs
+      .map(doc => ({ id: doc.id, ...doc.data() }))
+      .filter(post => post.status === 'draft')
+      .sort((a, b) => b.createdAt?.toDate() - a.createdAt?.toDate())
+    
+    return drafts
   } catch (error) {
     console.error('Error getting draft posts:', error)
     throw error
@@ -93,21 +91,19 @@ export async function getDraftPosts() {
 export async function getPublishedPosts(limitCount = null) {
   try {
     const postsRef = collection(db, BLOG_POSTS_COLLECTION)
-    let q = query(
-      postsRef,
-      where('status', '==', 'published'),
-      orderBy('publishedAt', 'desc')
-    )
+    const querySnapshot = await getDocs(postsRef)
+    
+    // Filter published posts in memory (avoids needing index)
+    let published = querySnapshot.docs
+      .map(doc => ({ id: doc.id, ...doc.data() }))
+      .filter(post => post.status === 'published')
+      .sort((a, b) => b.publishedAt?.toDate() - a.publishedAt?.toDate())
     
     if (limitCount) {
-      q = query(q, limit(limitCount))
+      published = published.slice(0, limitCount)
     }
     
-    const querySnapshot = await getDocs(q)
-    return querySnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    }))
+    return published
   } catch (error) {
     console.error('Error getting published posts:', error)
     throw error
@@ -178,6 +174,29 @@ export async function publishBlogPost(postId) {
 }
 
 /**
+ * Update blog post email status
+ */
+export async function updateBlogPostEmailStatus(postId, emailSent = false, emailSentAt = null) {
+  try {
+    const docRef = doc(db, BLOG_POSTS_COLLECTION, postId)
+    const updateData = {
+      emailSent,
+      updatedAt: Timestamp.now()
+    }
+    
+    if (emailSentAt) {
+      updateData.emailSentAt = emailSentAt
+    }
+    
+    await updateDoc(docRef, updateData)
+    return true
+  } catch (error) {
+    console.error('Error updating blog post email status:', error)
+    throw error
+  }
+}
+
+/**
  * Delete a blog post
  */
 export async function deleteBlogPost(postId) {
@@ -204,6 +223,47 @@ export async function markEmailSent(postId) {
     return true
   } catch (error) {
     console.error('Error marking email sent:', error)
+    throw error
+  }
+}
+
+/**
+ * Get the last published post by a specific supporter (for continue feature)
+ */
+export async function getLastPostBySupporter(supporterId) {
+  try {
+    const postsRef = collection(db, BLOG_POSTS_COLLECTION)
+    const querySnapshot = await getDocs(postsRef)
+    
+    // Filter posts in memory to avoid needing complex Firestore indexes
+    const supporterPosts = querySnapshot.docs
+      .map(doc => ({ id: doc.id, ...doc.data() }))
+      .filter(post => post.supporterId === supporterId && post.status === 'published')
+      .sort((a, b) => b.publishedAt?.toDate() - a.publishedAt?.toDate())
+    
+    return supporterPosts.length > 0 ? supporterPosts[0] : null
+  } catch (error) {
+    console.error('Error getting last post by supporter:', error)
+    throw error
+  }
+}
+
+/**
+ * Get all posts by a supporter (including drafts)
+ */
+export async function getAllPostsBySupporter(supporterId) {
+  try {
+    const postsRef = collection(db, BLOG_POSTS_COLLECTION)
+    const querySnapshot = await getDocs(postsRef)
+    
+    const supporterPosts = querySnapshot.docs
+      .map(doc => ({ id: doc.id, ...doc.data() }))
+      .filter(post => post.supporterId === supporterId)
+      .sort((a, b) => b.createdAt?.toDate() - a.createdAt?.toDate())
+    
+    return supporterPosts
+  } catch (error) {
+    console.error('Error getting all posts by supporter:', error)
     throw error
   }
 }

@@ -54,7 +54,18 @@ export const SUPPORTER_GROUPS = [
         description: 'Unlocking artistic potential and creative expression',
         icon: '🎨',
         voice: 'I say yes to your wild ideas and help you make space for them to flourish.',
-        active: true
+        active: true,
+        // Voice & Behavior Guide
+        voiceGuide: {
+          tone: 'Playful, encouraging, imaginative',
+          linguisticTics: ['What if we tried', 'I love this idea', 'Let\'s explore this', 'What\'s calling to you'],
+          boundaries: 'Not an art therapist; focuses on creative expression and artistic development',
+          openingMoves: ['What\'s been calling to you creatively lately?', 'Tell me about a project you\'re excited about', 'What would you create if you had no limits?'],
+          closers: ['What feels most alive in you right now?', 'How can we make space for your creativity?', 'What\'s one small creative act you could try?'],
+          blogStyle: 'Inspirational and imaginative posts with creative prompts and artistic insights'
+        },
+        tags: ['creativity', 'artistic-expression', 'inspiration', 'imagination', 'creative-process'],
+        resources: ['Art classes', 'Creative workshops', 'Artist communities']
       }
     ]
   },

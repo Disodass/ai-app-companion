@@ -180,11 +180,13 @@ export default function BlogEditor() {
         {showPreview ? (
           /* Preview Mode */
           <article className="prose prose-lg max-w-none">
-            <h1 className="text-4xl font-bold text-theme-text mb-4">{title}</h1>
-            <div className="text-theme-text-secondary mb-8">{excerpt}</div>
-            <div className="text-theme-text whitespace-pre-wrap leading-relaxed">
-              {content}
-            </div>
+            <h1 className="text-4xl font-bold text-theme-text mb-8">{title.replace(/\*\*(.*?)\*\*/g, '$1')}</h1>
+            <div 
+              className="text-theme-text whitespace-pre-wrap leading-relaxed"
+              dangerouslySetInnerHTML={{
+                __html: content.replace(/\\n/g, '\n').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+              }}
+            />
           </article>
         ) : (
           /* Edit Mode */
@@ -209,7 +211,7 @@ export default function BlogEditor() {
                 Excerpt (shown in lists)
               </label>
               <textarea
-                value={excerpt}
+                value={excerpt.replace(/\\n/g, '\n')}
                 onChange={(e) => setExcerpt(e.target.value)}
                 disabled={isPublished}
                 rows={2}
@@ -223,8 +225,8 @@ export default function BlogEditor() {
                 Content
               </label>
               <textarea
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
+                value={content.replace(/\\n/g, '\n')}
+                onChange={(e) => setContent(e.target.value.replace(/\n/g, '\\n'))}
                 disabled={isPublished}
                 rows={20}
                 className="w-full px-4 py-2 bg-theme-surface border border-theme-border rounded-lg text-theme-text focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:opacity-60 font-mono text-sm leading-relaxed"

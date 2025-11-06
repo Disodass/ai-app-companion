@@ -19,8 +19,13 @@ import TermsOfService from './pages/TermsOfService'
 import CookiePolicy from './pages/CookiePolicy'
 import AccountSettings from './pages/AccountSettings'
 import RootRedirect from './components/RootRedirect'
+import ProtectedRoute from './components/ProtectedRoute'
 import BlogAdmin from './pages/admin/BlogAdmin'
 import BlogEditor from './pages/admin/BlogEditor'
+import EmailManagement from './pages/admin/EmailManagement'
+import EmailTemplates from './pages/admin/EmailTemplates'
+import EmailInbox from './pages/admin/EmailInbox'
+import Unsubscribe from './pages/Unsubscribe'
 
 export default function App() {
   return (
@@ -41,8 +46,12 @@ export default function App() {
                 <Route path="/terms-of-service" element={<TermsOfService />} />
                 <Route path="/cookies" element={<CookiePolicy />} />
                 <Route path="/account-settings" element={<AccountSettings />} />
-                <Route path="/admin/blog" element={<BlogAdmin />} />
-                <Route path="/admin/blog/edit/:postId" element={<BlogEditor />} />
+            <Route path="/admin/blog" element={<ProtectedRoute><BlogAdmin /></ProtectedRoute>} />
+            <Route path="/admin/blog/edit/:postId" element={<ProtectedRoute><BlogEditor /></ProtectedRoute>} />
+            <Route path="/admin/email" element={<ProtectedRoute><EmailManagement /></ProtectedRoute>} />
+            <Route path="/admin/email/templates" element={<ProtectedRoute><EmailTemplates /></ProtectedRoute>} />
+            <Route path="/admin/email/inbox" element={<ProtectedRoute><EmailInbox /></ProtectedRoute>} />
+                <Route path="/unsubscribe/:subscriberId" element={<Unsubscribe />} />
                 <Route path="/supporters" element={
                   <AppLayout>
                     <Supporters />

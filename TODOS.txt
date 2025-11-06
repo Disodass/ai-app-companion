@@ -1,0 +1,38 @@
+Email System TODO
+=================
+
+Completed:
+✓ Set up SendGrid account and API key
+✓ Update Cloud Functions to use SendGrid
+✓ Store SendGrid API key in Firebase Secrets
+✓ Fix Firestore rules for newsletter_subscribers
+✓ Fix Firestore rules for email_campaigns (public create)
+✓ Remove emoji from subject lines
+✓ Add reply-to address to emails
+✓ Deploy updated application
+
+Completed:
+✓ Authenticate bestibule.ca domain in SendGrid ✓ DNS records added to Namecheap
+
+In Progress:
+→ Test email delivery to Gmail/Outlook
+→ Verify welcome emails reach inbox (not junk folder)
+
+Remaining:
+- Complete SendGrid domain authentication (SPF/DKIM/DMARC) ✓ Verified
+- Set up SendGrid Inbound Parse for receiving emails → In Progress
+- Add MX record to Namecheap for receiving emails
+- Test incoming email to connect@bestibule.ca
+- Monitor deliverability metrics
+
+SendGrid Inbound Parse Configuration:
+- Dashboard: Settings → Inbound Parse → Add Host & URL
+- Domain: bestibule.ca
+- Postback URL: https://bestibule.ca/api/inbound-email
+- Enable: POST the raw, full MIME message
+
+MX Record for Namecheap:
+- Type: MX
+- Host: @ (or blank)
+- Priority: 10
+- Value: mail.sendgrid.net
