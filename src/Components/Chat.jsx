@@ -513,24 +513,16 @@ export default function Chat({ user, darkMode, onToggleDarkMode }) {
   // Generate running Key Notes summary using AI
   async function generateKeyNotesSummary(user, allChatHistories, currentMessages, prevKeyNotes, aboutMe) {
     try {
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${import.meta.env.VITE_GROQ_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'llama-3.1-8b-instant',
-          messages: [
-            { role: 'system', content: `You are an expert Supporter agent. Summarize the most important facts, themes, and user preferences from all previous conversations and the current chat. Use a warm, professional tone. If there is an existing summary, update and improve it. If there is an About Me section, use it for context. Output a concise, running summary (Key Notes) for the user profile.` },
-            { role: 'user', content: `All chat histories: ${JSON.stringify(allChatHistories)}\nCurrent chat: ${JSON.stringify(currentMessages)}\nPrevious Key Notes: ${prevKeyNotes}\nAbout Me: ${aboutMe}` }
-          ],
-          max_tokens: 256,
-          temperature: 0.5,
-        }),
+      const { getAiReply } = await import('../services/aiReplyService');
+      const data = await getAiReply({
+        model: 'llama-3.1-8b-instant',
+        messages: [
+          { role: 'system', content: `You are an expert Supporter agent. Summarize the most important facts, themes, and user preferences from all previous conversations and the current chat. Use a warm, professional tone. If there is an existing summary, update and improve it. If there is an About Me section, use it for context. Output a concise, running summary (Key Notes) for the user profile.` },
+          { role: 'user', content: `All chat histories: ${JSON.stringify(allChatHistories)}\nCurrent chat: ${JSON.stringify(currentMessages)}\nPrevious Key Notes: ${prevKeyNotes}\nAbout Me: ${aboutMe}` }
+        ],
+        max_tokens: 256,
+        temperature: 0.5,
       });
-      if (!response.ok) throw new Error('Groq API error');
-      const data = await response.json();
       const summary = data.choices?.[0]?.message?.content?.trim();
       return summary || prevKeyNotes;
     } catch (e) {
@@ -591,16 +583,8 @@ export default function Chat({ user, darkMode, onToggleDarkMode }) {
     }
   };
 
-  // --- AI Integration: Groq API ---
+  // --- AI Integration: Groq API via Cloud Function ---
   const generateAIResponse = async (userInput, supporter, userProfile, supporterNotes, reminders, patternSummary, keyNotes, aboutMe, currentMessages, allChatHistories) => {
-    // Debug: Check if API key is loaded
-    if (!import.meta.env.VITE_GROQ_API_KEY) {
-      console.error('GROQ API key is missing!');
-      return 'Configuration error: API key not found. Please contact support.';
-    }
-    console.log('API Key length:', import.meta.env.VITE_GROQ_API_KEY?.length);
-    console.log('API Key starts with:', import.meta.env.VITE_GROQ_API_KEY?.substring(0, 10));
-    
     // CRISIS INTERVENTION: Check for crisis messages first
     if (isCrisisMessage(userInput)) {
       console.log('Crisis message detected, providing crisis response');
@@ -619,36 +603,27 @@ You are "${supporter.name}" (${supporter.icon}), an adaptive AI Supporter in the
     });
 
     try {
-      console.log('Making API request with model:', 'llama-3.1-8b-instant');
-      console.log('API Key present:', !!import.meta.env.VITE_GROQ_API_KEY);
+      console.log('Making API request via Cloud Function with model: llama-3.1-8b-instant');
+      const { getAiReply } = await import('../services/aiReplyService');
       
-      const responsePromise = fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${import.meta.env.VITE_GROQ_API_KEY}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'llama-3.1-8b-instant',
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userInput }
-          ],
-          max_tokens: 512,
-          temperature: 0.8,
-        }),
+      const responsePromise = getAiReply({
+        model: 'llama-3.1-8b-instant',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userInput }
+        ],
+        max_tokens: 512,
+        temperature: 0.8,
       });
 
-      const response = await Promise.race([responsePromise, timeoutPromise]);
-      console.log('Response status:', response.status);
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('API Error Response:', errorText);
-        throw new Error(`Groq API error: ${response.status} - ${errorText}`);
+      const data = await Promise.race([responsePromise, timeoutPromise]);
+      console.log('Response received from Cloud Function');
+      
+      if (!data || !data.choices || !data.choices[0]) {
+        throw new Error('Invalid response from AI service');
       }
-      const data = await response.json();
-      const aiText = data.choices?.[0]?.message?.content?.trim();
+      
+      const aiText = data.choices[0].message?.content?.trim();
       if (!aiText) throw new Error('No response from AI');
       return aiText;
     } catch (err) {

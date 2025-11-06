@@ -3,12 +3,14 @@ const admin = require('firebase-admin');
 const sgMail = require('@sendgrid/mail');
 const Busboy = require('busboy');
 const { Readable } = require('stream');
+// Node.js 20 has native fetch, no need for node-fetch
 
 admin.initializeApp();
 
 // Use the secret environment variable
 const { defineSecret } = require('firebase-functions/params');
 const sendgridApiKey = defineSecret('SENDGRID_API_KEY');
+const groqApiKey = defineSecret('GROQ_API_KEY');
 
 exports.sendEmail = functions.runWith({
   secrets: ['SENDGRID_API_KEY']
@@ -229,3 +231,42 @@ exports.receiveEmail = functions
       });
     }
   });
+
+// AI Reply function - server-side Groq API call
+exports.aiReply = functions.runWith({
+  secrets: ['GROQ_API_KEY'],
+  timeoutSeconds: 60
+}).https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Sign in required');
+  }
+
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    throw new functions.https.HttpsError('internal', 'Groq API key not configured');
+  }
+
+  try {
+    const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data.payload),
+    });
+
+    if (!resp.ok) {
+      const errorText = await resp.text();
+      throw new functions.https.HttpsError('internal', `Groq error: ${resp.status} - ${errorText}`);
+    }
+
+    return await resp.json();
+  } catch (error) {
+    console.error('Groq API error:', error);
+    if (error instanceof functions.https.HttpsError) {
+      throw error;
+    }
+    throw new functions.https.HttpsError('internal', `Groq API error: ${error.message}`);
+  }
+});

@@ -1,5 +1,5 @@
-// Replace the whole file with this
 import { generateSupporterPrompt } from './supporterPrompts';
+import { getAiReply } from './aiReplyService';
 
 let inFlight; // abort previous call if user sends again quickly
 
@@ -26,24 +26,19 @@ export async function generateAndSendAiMessageServer(conversationId, prompt, his
     ...(sameLast ? [] : [{ role: 'user', content: prompt }])
   ];
 
-  const apiKey = import.meta.env.VITE_GROQ_API_KEY;
-  if (!apiKey) {
-    throw new Error('GROQ API key not configured. Please set VITE_GROQ_API_KEY environment variable.');
+  try {
+    // Call Groq API via Cloud Function (server-side)
+    const data = await getAiReply({
+      model,
+      messages,
+      temperature: 0.6
+    });
+    
+    const text = data?.choices?.[0]?.message?.content?.trim() || '…';
+    inFlight = undefined;
+    return text;
+  } catch (error) {
+    inFlight = undefined;
+    throw new Error(`Groq API error: ${error.message}`);
   }
-
-  const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    signal: inFlight.signal,
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ model, messages, temperature: 0.6 })
-  });
-
-  if (!resp.ok) throw new Error(`Groq API error: ${resp.status}`);
-  const data = await resp.json();
-  const text = data?.choices?.[0]?.message?.content?.trim() || '…';
-  inFlight = undefined;
-  return text;
 }

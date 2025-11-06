@@ -1,5 +1,5 @@
 import { collection, collectionGroup, query, where, orderBy, limit, onSnapshot, addDoc, doc, setDoc, serverTimestamp, updateDoc, getDocs, getDoc } from "firebase/firestore";
-import { db } from "../firebaseConfig";
+import { db, auth } from "../firebaseConfig";
 
 // Find or create a conversation for a specific supporter
 export async function findOrCreateSupporterConversation(uid, supporterId) {
@@ -8,14 +8,24 @@ export async function findOrCreateSupporterConversation(uid, supporterId) {
   try {
     // For AI Friend, check for legacy conversations first
     if (supporterId === 'ai-friend') {
-      // 1) Check for legacy dm__{uid} conversation
-      const legacyId = `dm__${uid}`;
+      // 1) Check for legacy dm_{uid} conversation (single underscore - preferred)
+      const legacyId = `dm_${uid}`;
       const legacyRef = doc(db, "conversations", legacyId);
       const legacyExists = await getDoc(legacyRef);
       
       if (legacyExists.exists()) {
         console.log('✅ Found legacy conversation, using:', legacyId);
         return { id: legacyId };
+      }
+      
+      // 2) Also check for double underscore variant (backward compatibility)
+      const legacyIdDouble = `dm__${uid}`;
+      const legacyRefDouble = doc(db, "conversations", legacyIdDouble);
+      const legacyExistsDouble = await getDoc(legacyRefDouble);
+      
+      if (legacyExistsDouble.exists()) {
+        console.log('✅ Found legacy conversation (double underscore), using:', legacyIdDouble);
+        return { id: legacyIdDouble };
       }
       
       // 2) Check for any existing conversations with messages for this user
@@ -101,30 +111,50 @@ export function listenLatestMessages(conversationId, callback, pageSize = 500) {
 }
 
 export async function sendMessage(conversationId, authorId, text, meta = {}) {
-  const messageRef = collection(db, "conversations", conversationId, "messages");
+  // Get the current user's UID
+  const uid = auth.currentUser?.uid || authorId;
   
-  const messageData = {
+  // Normalize conversation ID - standardize on single underscore for DMs
+  let cid = conversationId;
+  if (conversationId.startsWith('dm__')) {
+    cid = 'dm_' + conversationId.slice(4);
+  } else if (conversationId.startsWith('dm_')) {
+    cid = conversationId; // Already correct
+  }
+  // For supporter conversations, keep as-is
+  
+  const convRef = doc(db, 'conversations', cid);
+  const snap = await getDoc(convRef);
+
+  if (!snap.exists()) {
+    // Create conversation document with members array
+    await setDoc(convRef, {
+      type: 'dm',
+      ownerUid: uid,
+      members: [uid],                 // add members for modern documents
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+  } else {
+    // Update timestamp even if exists
+    await setDoc(convRef, { updatedAt: serverTimestamp() }, { merge: true });
+  }
+
+  // Add the message
+  await addDoc(collection(convRef, 'messages'), {
     text,
-    authorId,
+    authorId: authorId || uid,
+    uid: uid,
     createdAt: serverTimestamp(),
-    status: "sending",
-    meta
-  };
-  
-  const docRef = await addDoc(messageRef, messageData);
-  
-  // Update message status to sent
-  await updateDoc(docRef, { status: "sent" });
-  
-  // Update conversation metadata
-  const convRef = doc(db, "conversations", conversationId);
-  await updateDoc(convRef, {
-    lastMessage: text,
-    updatedAt: serverTimestamp(),
-    messageCount: serverTimestamp() // This will be updated properly by a cloud function
+    status: "sent",
+    ...(meta && Object.keys(meta).length > 0 ? { meta } : {})
   });
   
-  return docRef;
+  // Update conversation last message
+  await updateDoc(convRef, {
+    lastMessage: text,
+    updatedAt: serverTimestamp()
+  });
 }
 
 export async function markConversationRead(conversationId, uid) {
