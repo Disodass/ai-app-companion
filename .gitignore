@@ -32,8 +32,8 @@ dist-ssr
 
 # Firebase
 .firebase/
-.firebaserc
-firebase.json
+.firebaserc.local
+# Note: firebase.json and .firebaserc are tracked (they don't contain secrets)
 
 # MUI BAN - Prevent accidental MUI installation
 package-lock.json
