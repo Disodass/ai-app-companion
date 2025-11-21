@@ -41,17 +41,50 @@ export async function findOrCreateSupporterConversation(uid, supporterId) {
       }
       
       // 2) Check for any existing conversations with messages for this user
-      const conversationsQuery = query(
-        collection(db, "conversations"),
-        where("members", "array-contains", uid),
-        orderBy("messageCount", "desc")
-      );
+      // Try query without orderBy first (no composite index needed)
+      try {
+        const conversationsQuery = query(
+          collection(db, "conversations"),
+          where("members", "array-contains", uid)
+        );
+        
+        const conversationsSnapshot = await getDocs(conversationsQuery);
+        if (!conversationsSnapshot.empty) {
+          // Find the conversation with the most messages (or supporterId match)
+          const conversations = conversationsSnapshot.docs.map(doc => ({
+            id: doc.id,
+            data: doc.data()
+          }));
+          
+          // Prefer conversations with supporterId matching 'ai-friend'
+          const aiFriendConv = conversations.find(c => c.data.supporterId === 'ai-friend');
+          if (aiFriendConv) {
+            console.log('✅ Found existing ai-friend conversation:', aiFriendConv.id);
+            return { id: aiFriendConv.id };
+          }
+          
+          // Otherwise, prefer conversation with highest messageCount
+          const sortedByMessages = conversations.sort((a, b) => 
+            (b.data.messageCount || 0) - (a.data.messageCount || 0)
+          );
+          
+          if (sortedByMessages.length > 0) {
+            console.log('✅ Found existing conversation with messages:', sortedByMessages[0].id);
+            return { id: sortedByMessages[0].id };
+          }
+        }
+      } catch (queryError) {
+        console.warn('⚠️ Query for existing conversations failed (might need index):', queryError);
+        // Continue to create new conversation
+      }
       
-      const conversationsSnapshot = await getDocs(conversationsQuery);
-      if (!conversationsSnapshot.empty) {
-        const bestConv = conversationsSnapshot.docs[0];
-        console.log('✅ Found existing conversation with messages:', bestConv.id);
-        return { id: bestConv.id };
+      // 3) Also check for supporter-specific conversation ID
+      const supporterConvId = `supporter__${uid}__ai-friend`;
+      const supporterConvRef = doc(db, "conversations", supporterConvId);
+      const supporterConvExists = await getDoc(supporterConvRef);
+      if (supporterConvExists.exists()) {
+        console.log('✅ Found existing supporter conversation:', supporterConvId);
+        return { id: supporterConvId };
       }
     }
     
