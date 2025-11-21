@@ -38,7 +38,7 @@ export default function AdminHeader() {
             </div>
             
             {/* Navigation */}
-            <nav className="hidden md:flex items-center space-x-2 ml-8">
+            <nav className="flex items-center space-x-2 ml-8">
               <Link to="/admin/blog" className={navLinkClass('/admin/blog')}>
                 📝 Blog
               </Link>
@@ -50,6 +50,9 @@ export default function AdminHeader() {
               </Link>
               <Link to="/admin/email/templates" className={navLinkClass('/admin/email/templates')}>
                 📄 Templates
+              </Link>
+              <Link to="/admin/summaries" className={navLinkClass('/admin/summaries')}>
+                📊 Summaries
               </Link>
             </nav>
           </div>

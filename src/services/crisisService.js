@@ -27,9 +27,10 @@ setInterval(() => {
 // English & French keywords (Canada bilingual) + common variants
 const CRISIS_KEYWORDS = [
   // EN
-  'suicide','suicidal','want to die','i want to die','want die','kill myself','end my life','end it all',
+  'suicide','suicidal','want to die','i want to die','want die','kill myself','end my life','end it all','end it',
   'better off dead','no reason to live','not worth living','can\'t go on','can\'t take it anymore',
   'self harm','self-harm','hurt myself','cut myself','overdose','jump off','hang myself','poison myself',
+  'going to end it','gonna end it','i\'m going to end it',
   // FR
   'suicidé','suicide','suicidaire','je veux mourir','veux mourir','me tuer','me suicider',
   'mettre fin à mes jours','plus envie de vivre','me faire du mal','automutilation','me couper','overdose',
@@ -54,7 +55,8 @@ const NON_CRISIS_CONTEXTS = [
 
 // Force alert patterns - always trigger even with context words (stricter regex)
 const FORCE_ALERT = [
-  /\b(i\s+(will|am going to)\s+(kill myself|end my life|harm myself|hurt myself|cut myself|hang myself|jump off))\b/i
+  /\b(i\s+(will|am going to|'m going to|'m gonna|gonna)\s+(kill myself|end my life|end it|harm myself|hurt myself|cut myself|hang myself|jump off))\b/i,
+  /\b(i'm going to end it|i'm gonna end it|going to end it|gonna end it)\b/i
   // deliberately omit bare "die" to avoid false positives
 ];
 
@@ -113,6 +115,84 @@ export const isCrisisMessage = (message) => {
   return CRISIS_KEYWORDS.some(keyword => lower.includes(keyword));
 };
 
+// Progressive risk detection - analyze conversation context for escalating patterns
+// Detects escalating patterns like "not feeling well" + "pills" = high risk
+export const detectProgressiveRisk = (currentMessage, recentMessages = []) => {
+  const lower = (currentMessage || '').toLowerCase();
+  const recentUserMessages = recentMessages
+    ?.filter(m => (m.authorId !== 'assistant' && m.meta?.role !== 'ai') || m.sender === 'user')
+    ?.map(m => (m.text || m.content || '').toLowerCase())
+    ?.slice(-5) || []; // Last 5 user messages
+  
+  // Pattern: "not feeling well" + "pills" = high risk
+  const hasFeelingUnwell = recentUserMessages.some(msg => 
+    msg.includes('not feeling well') || 
+    msg.includes('feeling unwell') || 
+    msg.includes('don\'t feel well') ||
+    msg.includes('feel bad') ||
+    msg.includes('feel terrible')
+  );
+  
+  const hasPills = lower.includes('pills') || lower.includes('medication') || lower.includes('medicine');
+  const hasOverdose = lower.includes('overdose') || lower.includes('too many') || lower.includes('took too many');
+  
+  if (hasFeelingUnwell && (hasPills || hasOverdose)) {
+    return 'high'; // Escalating pattern detected
+  }
+  
+  // Pattern: "sad" + "don't want to live" = high risk
+  const hasSadness = recentUserMessages.some(msg =>
+    msg.includes('sad') || msg.includes('depressed') || msg.includes('hopeless')
+  );
+  const hasNoWillToLive = lower.includes('don\'t want to live') || lower.includes('no reason to live');
+  
+  if (hasSadness && hasNoWillToLive) {
+    return 'high';
+  }
+  
+  // Pattern: "tired" + "can't go on" = medium-high risk
+  const hasTiredness = recentUserMessages.some(msg =>
+    msg.includes('tired') || msg.includes('exhausted') || msg.includes('can\'t take it')
+  );
+  const hasCantGoOn = lower.includes('can\'t go on') || lower.includes('can\'t take it anymore');
+  
+  if (hasTiredness && hasCantGoOn) {
+    return 'medium';
+  }
+  
+  // Pattern: "nothing matters" + "what's the point" = high risk
+  const hasNothingMatters = recentUserMessages.some(msg =>
+    msg.includes('nothing matters') || msg.includes('doesn\'t matter') || msg.includes('pointless')
+  );
+  const hasWhatsThePoint = lower.includes('what\'s the point') || lower.includes('whats the point') || lower.includes('no point');
+  
+  if (hasNothingMatters && hasWhatsThePoint) {
+    return 'high';
+  }
+  
+  // Pattern: "alone" + "no one cares" = medium risk
+  const hasAlone = recentUserMessages.some(msg =>
+    msg.includes('alone') || msg.includes('lonely') || msg.includes('no one')
+  );
+  const hasNoOneCares = lower.includes('no one cares') || lower.includes('nobody cares') || lower.includes('no one would miss me');
+  
+  if (hasAlone && hasNoOneCares) {
+    return 'medium';
+  }
+  
+  // Pattern: "hurt" + "want it to stop" = medium-high risk
+  const hasHurt = recentUserMessages.some(msg =>
+    msg.includes('hurt') || msg.includes('pain') || msg.includes('suffering')
+  );
+  const hasWantItToStop = lower.includes('want it to stop') || lower.includes('make it stop') || lower.includes('end the pain');
+  
+  if (hasHurt && hasWantItToStop) {
+    return 'medium';
+  }
+  
+  return null; // No progressive pattern detected
+};
+
 // Risk analysis with escalation check
 export const analyzeCrisisLevel = (message, recentMessages = []) => {
   const lower = (message || '').toLowerCase();
@@ -120,16 +200,20 @@ export const analyzeCrisisLevel = (message, recentMessages = []) => {
   // Force alert patterns are always high risk
   if (matchesForceAlert(lower)) return 'high';
   
+  // Check for progressive risk patterns first
+  const progressiveRisk = detectProgressiveRisk(message, recentMessages);
+  if (progressiveRisk) return progressiveRisk;
+  
   if (hasNegatedCrisis(lower)) return 'low';
   if (hasNonCrisisContext(lower)) return 'low';
 
-  const high = ['suicide','kill myself','end my life','i want to die','want to die','end it all','me suicider','je veux mourir'];
+  const high = ['suicide','kill myself','end my life','i want to die','want to die','end it all','end it','going to end it','gonna end it','me suicider','je veux mourir'];
   const medium = ['self harm','self-harm','hurt myself','cut myself','overdose','automutilation','me couper'];
 
   if (high.some(k => lower.includes(k))) return 'high';
   if (medium.some(k => lower.includes(k))) return 'medium';
 
-  const recent = recentMessages?.filter(m => m?.sender === 'user' && isCrisisMessage(m?.text))?.length || 0;
+  const recent = recentMessages?.filter(m => (m.authorId !== 'assistant' && m.meta?.role !== 'ai') || m.sender === 'user')?.filter(m => isCrisisMessage(m.text || m.content))?.length || 0;
   if (recent > 0) return 'escalating';
   return 'low';
 };
@@ -213,10 +297,10 @@ const cleanupSessionCounts = () => {
 };
 
 // Tiered, location-aware response with rate limiting
-export const generateCrisisResponse = async (userInput, supporter, userId = 'anonymous') => {
+export const generateCrisisResponse = async (userInput, supporter, userId = 'anonymous', recentMessages = []) => {
   const supporterName = supporter?.name || 'Supporter';
   const supporterIcon = supporter?.icon || '💙';
-  const riskLevel = analyzeCrisisLevel(userInput);
+  const riskLevel = analyzeCrisisLevel(userInput, recentMessages);
 
   // Hash user ID for privacy
   const hashedUserId = await hashId(userId);

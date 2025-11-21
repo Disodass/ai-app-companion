@@ -93,7 +93,7 @@ export default function Chat() {
       await sendMessage(convId, user.uid, messageText, { role: 'user' })
 
             // Get AI response via server function - pass existing history and supporter ID
-            const aiResponse = await generateAndSendAiMessageServer(convId, messageText, messages, { supporterId });
+            const aiResponse = await generateAndSendAiMessageServer(convId, messageText, messages, { supporterId, userId: user.uid });
       
       // Send AI response to Firestore with authorId "assistant" for proper alignment
       await sendMessage(convId, 'assistant', aiResponse, { role: 'ai' });

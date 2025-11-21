@@ -13,15 +13,27 @@ export async function findOrCreateSupporterConversation(uid, supporterId) {
       const legacyRef = doc(db, "conversations", legacyId);
       const legacyExists = await getDoc(legacyRef);
       
-      if (legacyExists.exists()) {
-        console.log('✅ Found legacy conversation, using:', legacyId);
-        return { id: legacyId };
-      }
-      
       // 2) Also check for double underscore variant (backward compatibility)
       const legacyIdDouble = `dm__${uid}`;
       const legacyRefDouble = doc(db, "conversations", legacyIdDouble);
       const legacyExistsDouble = await getDoc(legacyRefDouble);
+      
+      // If both exist, prefer single underscore and mark double as deprecated
+      if (legacyExists.exists() && legacyExistsDouble.exists()) {
+        console.log('⚠️ Both dm_ and dm__ exist, using single underscore and marking double as deprecated');
+        // Mark double underscore as deprecated (don't delete, just mark)
+        await updateDoc(legacyRefDouble, {
+          deprecated: true,
+          consolidatedInto: legacyId,
+          consolidatedAt: serverTimestamp()
+        });
+        return { id: legacyId };
+      }
+      
+      if (legacyExists.exists()) {
+        console.log('✅ Found legacy conversation, using:', legacyId);
+        return { id: legacyId };
+      }
       
       if (legacyExistsDouble.exists()) {
         console.log('✅ Found legacy conversation (double underscore), using:', legacyIdDouble);
@@ -113,17 +125,8 @@ export function listenLatestMessages(conversationId, callback, pageSize = 500) {
 export async function sendMessage(conversationId, authorId, text, meta = {}) {
   // Get the current user's UID
   const uid = auth.currentUser?.uid || authorId;
-  
-  // Normalize conversation ID - standardize on single underscore for DMs
-  let cid = conversationId;
-  if (conversationId.startsWith('dm__')) {
-    cid = 'dm_' + conversationId.slice(4);
-  } else if (conversationId.startsWith('dm_')) {
-    cid = conversationId; // Already correct
-  }
-  // For supporter conversations, keep as-is
-  
-  const convRef = doc(db, 'conversations', cid);
+
+  const convRef = doc(db, 'conversations', conversationId);
   const snap = await getDoc(convRef);
 
   if (!snap.exists()) {
@@ -174,3 +177,10 @@ export function listenUserConversations(uid, callback) {
   
   return onSnapshot(q, callback);
 }
+
+// Re-export summary functions for convenience (as specified in plan)
+// These are implemented in conversationSummaryService.js
+export { 
+  getConversationSummaries,
+  getSummaryContext 
+} from './conversationSummaryService';

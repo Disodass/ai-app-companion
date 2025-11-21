@@ -25,6 +25,7 @@ import BlogEditor from './pages/admin/BlogEditor'
 import EmailManagement from './pages/admin/EmailManagement'
 import EmailTemplates from './pages/admin/EmailTemplates'
 import EmailInbox from './pages/admin/EmailInbox'
+import SummaryTester from './pages/admin/SummaryTester'
 import Unsubscribe from './pages/Unsubscribe'
 
 export default function App() {
@@ -51,6 +52,7 @@ export default function App() {
             <Route path="/admin/email" element={<ProtectedRoute><EmailManagement /></ProtectedRoute>} />
             <Route path="/admin/email/templates" element={<ProtectedRoute><EmailTemplates /></ProtectedRoute>} />
             <Route path="/admin/email/inbox" element={<ProtectedRoute><EmailInbox /></ProtectedRoute>} />
+            <Route path="/admin/summaries" element={<ProtectedRoute><SummaryTester /></ProtectedRoute>} />
                 <Route path="/unsubscribe/:subscriberId" element={<Unsubscribe />} />
                 <Route path="/supporters" element={
                   <AppLayout>
