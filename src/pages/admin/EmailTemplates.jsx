@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
-import EmailPreviewModal from '../../components/admin/EmailPreviewModal'
-import AdminHeader from '../../components/admin/AdminHeader'
+import EmailPreviewModal from '../../Components/admin/EmailPreviewModal'
+import AdminHeader from '../../Components/admin/AdminHeader'
 
 export default function EmailTemplates() {
   const [welcomeTemplate, setWelcomeTemplate] = useState(`Welcome to the Bestibule community! 🎉

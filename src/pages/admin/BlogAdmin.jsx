@@ -2,11 +2,11 @@ import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext'
 import { getDraftPosts, getPublishedPosts } from '../../services/blogService'
-import GeneratePostModal from '../../components/admin/GeneratePostModal'
-import DraftsList from '../../components/admin/DraftsList'
-import AutomatedContentModal from '../../components/admin/AutomatedContentModal'
-import UpcomingSchedule from '../../components/UpcomingSchedule'
-import AdminHeader from '../../components/admin/AdminHeader'
+import GeneratePostModal from '../../Components/admin/GeneratePostModal'
+import DraftsList from '../../Components/admin/DraftsList'
+import AutomatedContentModal from '../../Components/admin/AutomatedContentModal'
+import UpcomingSchedule from '../../Components/UpcomingSchedule'
+import AdminHeader from '../../Components/admin/AdminHeader'
 
 export default function BlogAdmin() {
   const navigate = useNavigate()

@@ -3,8 +3,8 @@ import { getCampaignAnalytics, getEmailCampaigns, getAllSubscribers, deleteSubsc
 import { sendIndividualBlogEmail, sendWeeklyRecapEmail, sendWeeklyPreviewEmail, generateIndividualBlogEmailPreview, generateWeeklyRecapEmailPreview, generateWeeklyPreviewEmailPreview } from '../../services/emailAutomationService'
 import { sendWelcomeEmail, sendFollowUpEmail, generateWelcomeEmailPreview, generateFollowUpEmailPreview } from '../../services/welcomeSequenceService'
 import { authenticatedFetch } from '../../services/emailHelper'
-import EmailPreviewModal from '../../components/admin/EmailPreviewModal'
-import AdminHeader from '../../components/admin/AdminHeader'
+import EmailPreviewModal from '../../Components/admin/EmailPreviewModal'
+import AdminHeader from '../../Components/admin/AdminHeader'
 
 export default function EmailManagement() {
   const [analytics, setAnalytics] = useState(null)

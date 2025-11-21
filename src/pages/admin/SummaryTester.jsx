@@ -3,7 +3,7 @@ import { useAuth } from '../../contexts/AuthContext'
 import { getConversationSummaries, getSummaryContext } from '../../services/conversationSummaryService'
 import { collection, query, orderBy, limit, getDocs, getDoc, doc } from 'firebase/firestore'
 import { db } from '../../firebaseConfig'
-import AdminHeader from '../../components/admin/AdminHeader'
+import AdminHeader from '../../Components/admin/AdminHeader'
 
 export default function SummaryTester() {
   const { user } = useAuth()

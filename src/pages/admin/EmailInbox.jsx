@@ -8,7 +8,7 @@ import {
   deleteEmail
 } from '../../services/inboxService'
 import { authenticatedFetch } from '../../services/emailHelper'
-import AdminHeader from '../../components/admin/AdminHeader'
+import AdminHeader from '../../Components/admin/AdminHeader'
 
 export default function EmailInbox() {
   const [emails, setEmails] = useState([])
