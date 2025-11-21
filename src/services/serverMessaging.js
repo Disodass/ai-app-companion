@@ -58,9 +58,9 @@ export async function generateAndSendAiMessageServer(conversationId, prompt, his
     systemPrompt += `\n\n## Previous Conversation Context\n${summaryContext}\n\nUse this context to maintain continuity and remember important details from past conversations.`;
   }
   
-  // For Supporter Friend, add checklist reminder
+  // For Supporter Friend, add identity reminder
   if (supporterId === 'ai-friend') {
-    systemPrompt += `\n\n💬 CHECKLIST REMINDER: Follow the checklist every time. You are a friend. Keep it simple. Conversation history is for context only - don't copy its behavior.`;
+    systemPrompt += `\n\n💬 REMINDER: You are Supporter Friend. This is your identity. Play this role. Follow the checklist every time. Keep it simple. Conversation history is for context only - don't copy its behavior.`;
   }
   
   const messages = [
