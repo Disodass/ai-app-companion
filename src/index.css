@@ -77,3 +77,26 @@ html.dark {
 .btn-brand-secondary{background:transparent;color:var(--brand-primary);border:1px solid var(--brand-primary)}
 .input-theme{background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary)}
 .input-theme::placeholder{color:var(--text-muted)}
+
+/* Custom scrollbar styling */
+.overflow-y-auto {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-primary) transparent;
+}
+
+.overflow-y-auto::-webkit-scrollbar {
+  width: 8px;
+}
+
+.overflow-y-auto::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.overflow-y-auto::-webkit-scrollbar-thumb {
+  background-color: var(--border-primary);
+  border-radius: 4px;
+}
+
+.overflow-y-auto::-webkit-scrollbar-thumb:hover {
+  background-color: var(--border-secondary);
+}

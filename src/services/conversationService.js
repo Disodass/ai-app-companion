@@ -40,8 +40,22 @@ export async function findOrCreateSupporterConversation(uid, supporterId) {
         return { id: legacyIdDouble };
       }
       
-      // 2) Check for any existing conversations with messages for this user
+      // 2) Check for supporter-specific conversation ID first (most reliable)
+      const supporterConvId = `supporter__${uid}__ai-friend`;
+      const supporterConvRef = doc(db, "conversations", supporterConvId);
+      try {
+        const supporterConvExists = await getDoc(supporterConvRef);
+        if (supporterConvExists.exists()) {
+          console.log('✅ Found existing supporter conversation:', supporterConvId);
+          return { id: supporterConvId };
+        }
+      } catch (err) {
+        console.warn('⚠️ Error checking supporter conversation:', err);
+      }
+      
+      // 3) Check for any existing conversations with messages for this user
       // Try query without orderBy first (no composite index needed)
+      // Note: This query requires the 'members' field to exist, so legacy conversations without it won't be found
       try {
         const conversationsQuery = query(
           collection(db, "conversations"),
@@ -49,12 +63,16 @@ export async function findOrCreateSupporterConversation(uid, supporterId) {
         );
         
         const conversationsSnapshot = await getDocs(conversationsQuery);
+        console.log('📋 Query returned', conversationsSnapshot.docs.length, 'conversations');
+        
         if (!conversationsSnapshot.empty) {
           // Find the conversation with the most messages (or supporterId match)
           const conversations = conversationsSnapshot.docs.map(doc => ({
             id: doc.id,
             data: doc.data()
           }));
+          
+          console.log('📋 Conversations found:', conversations.map(c => ({ id: c.id, supporterId: c.data.supporterId, messageCount: c.data.messageCount })));
           
           // Prefer conversations with supporterId matching 'ai-friend'
           const aiFriendConv = conversations.find(c => c.data.supporterId === 'ai-friend');
@@ -72,19 +90,19 @@ export async function findOrCreateSupporterConversation(uid, supporterId) {
             console.log('✅ Found existing conversation with messages:', sortedByMessages[0].id);
             return { id: sortedByMessages[0].id };
           }
+        } else {
+          console.log('📋 No conversations found with members array containing user');
         }
       } catch (queryError) {
-        console.warn('⚠️ Query for existing conversations failed (might need index):', queryError);
+        console.error('❌ Query for existing conversations failed:', queryError);
+        console.error('Error code:', queryError.code);
+        console.error('Error message:', queryError.message);
+        // If it's a permission error, that's expected - continue to create new conversation
+        // If it's a 400 error, it might be an index issue or invalid query
+        if (queryError.code === 'failed-precondition') {
+          console.warn('⚠️ Query requires an index. Check Firebase console for index creation link.');
+        }
         // Continue to create new conversation
-      }
-      
-      // 3) Also check for supporter-specific conversation ID
-      const supporterConvId = `supporter__${uid}__ai-friend`;
-      const supporterConvRef = doc(db, "conversations", supporterConvId);
-      const supporterConvExists = await getDoc(supporterConvRef);
-      if (supporterConvExists.exists()) {
-        console.log('✅ Found existing supporter conversation:', supporterConvId);
-        return { id: supporterConvId };
       }
     }
     
