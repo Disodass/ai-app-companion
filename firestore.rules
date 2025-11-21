@@ -50,9 +50,16 @@ service cloud.firestore {
       function isMemberConvDoc(conversationId) {
         return request.auth != null
           && (
-            (resource.data.members is list
-              && resource.data.members.hasAny([request.auth.uid]))
-            || isOwnerDM(conversationId)
+            // Legacy DM conversations
+            isOwnerDM(conversationId)
+            // Supporter conversations (supporter__{uid}__{supporterId})
+            || (conversationId.matches('supporter__' + request.auth.uid + '__.*'))
+            // Conversations with members array
+            || (resource != null && resource.data != null && resource.data.members is list
+                && resource.data.members.hasAny([request.auth.uid]))
+            // Legacy conversations - check if conversationId starts with dm_ and contains uid
+            || (conversationId.matches('dm_.*') 
+                && (conversationId == "dm_" + request.auth.uid || conversationId == "dm__" + request.auth.uid))
           );
       }
       function isMemberFromParent(conversationId) {
@@ -62,7 +69,7 @@ service cloud.firestore {
 
       function isValidConversationCreate() {
         return request.resource.data.keys().hasOnly([
-          "createdAt","updatedAt","members","memberMeta","lastMessage","messageCount"
+          "createdAt","updatedAt","members","memberMeta","lastMessage","messageCount","supporterId"
         ])
         && request.resource.data.members is list
         && request.resource.data.members.size() >= 1
