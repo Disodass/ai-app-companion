@@ -907,3 +907,359 @@ Provide your response as JSON with these fields:
       return res.status(500).json({ error: `Batch summary failed: ${error.message}` });
     }
   });
+
+// Cleanup inactive users - automatically delete user data for accounts inactive 90+ days
+exports.cleanupInactiveUsers = functions
+  .runWith({ timeoutSeconds: 540 })
+  .pubsub.schedule('0 2 * * 0') // Run weekly on Sunday at 2 AM
+  .timeZone('America/New_York')
+  .onRun(async (context) => {
+    const db = admin.firestore();
+    const auth = admin.auth();
+    
+    // Configuration
+    const INACTIVITY_DAYS = parseInt(process.env.CLEANUP_INACTIVITY_DAYS || '90');
+    const DRY_RUN = process.env.CLEANUP_DRY_RUN === 'true';
+    const MIN_INACTIVITY_MS = INACTIVITY_DAYS * 24 * 60 * 60 * 1000;
+    const cutoffDate = new Date(Date.now() - MIN_INACTIVITY_MS);
+    
+    console.log(`🧹 Starting user cleanup (dry-run: ${DRY_RUN}, inactivity threshold: ${INACTIVITY_DAYS} days)`);
+    console.log(`📅 Cutoff date: ${cutoffDate.toISOString()}`);
+    
+    const stats = {
+      usersChecked: 0,
+      usersIdentified: 0,
+      usersDeleted: 0,
+      conversationsDeleted: 0,
+      messagesDeleted: 0,
+      errors: []
+    };
+    
+    try {
+      // Get all users from Firestore users collection
+      const usersSnapshot = await db.collection('users').get();
+      stats.usersChecked = usersSnapshot.size;
+      console.log(`📊 Found ${stats.usersChecked} users in Firestore`);
+      
+      const usersToDelete = [];
+      
+      for (const userDoc of usersSnapshot.docs) {
+        const userId = userDoc.id;
+        const userData = userDoc.data();
+        
+        // Check last activity timestamp
+        const lastActivity = userData.lastLoginAt || userData.updatedAt || userData.createdAt;
+        let lastActivityDate = null;
+        
+        if (lastActivity) {
+          if (lastActivity.toDate) {
+            lastActivityDate = lastActivity.toDate();
+          } else if (lastActivity._seconds) {
+            lastActivityDate = new Date(lastActivity._seconds * 1000);
+          } else if (typeof lastActivity === 'string') {
+            lastActivityDate = new Date(lastActivity);
+          }
+        }
+        
+        // Also check Firebase Auth for last sign-in
+        let authLastSignIn = null;
+        try {
+          const authUser = await auth.getUser(userId);
+          if (authUser.metadata.lastSignInTime) {
+            authLastSignIn = new Date(authUser.metadata.lastSignInTime);
+          }
+        } catch (err) {
+          // User might not exist in Auth (deleted already)
+          console.log(`⚠️ User ${userId} not found in Auth, will be cleaned up`);
+        }
+        
+        // Use the most recent activity date
+        const mostRecentActivity = lastActivityDate && authLastSignIn
+          ? (lastActivityDate > authLastSignIn ? lastActivityDate : authLastSignIn)
+          : (lastActivityDate || authLastSignIn);
+        
+        if (!mostRecentActivity) {
+          // No activity data - check if account is very old (created > 180 days ago)
+          const createdAt = userData.createdAt;
+          let createdDate = null;
+          if (createdAt) {
+            if (createdAt.toDate) {
+              createdDate = createdAt.toDate();
+            } else if (createdAt._seconds) {
+              createdDate = new Date(createdAt._seconds * 1000);
+            }
+          }
+          
+          if (createdDate && (Date.now() - createdDate.getTime()) > (180 * 24 * 60 * 60 * 1000)) {
+            // Account is 180+ days old with no activity
+            usersToDelete.push({ userId, reason: 'no_activity_data_old_account' });
+            continue;
+          }
+          
+          // Skip if we can't determine inactivity
+          continue;
+        }
+        
+        // Check if user is inactive
+        if (mostRecentActivity < cutoffDate) {
+          usersToDelete.push({ 
+            userId, 
+            lastActivity: mostRecentActivity.toISOString(),
+            reason: 'inactive'
+          });
+        }
+      }
+      
+      stats.usersIdentified = usersToDelete.length;
+      console.log(`📋 Identified ${stats.usersIdentified} inactive users for cleanup`);
+      
+      if (DRY_RUN) {
+        console.log('🔍 DRY RUN MODE - No deletions will be performed');
+        console.log('Users that would be deleted:', usersToDelete.map(u => ({ id: u.userId, reason: u.reason })));
+        return { success: true, dryRun: true, stats };
+      }
+      
+      // Delete user data for each inactive user
+      for (const { userId, reason } of usersToDelete) {
+        try {
+          console.log(`🗑️ Deleting data for user ${userId} (reason: ${reason})`);
+          
+          // 1. Find and delete all conversations where user is a member
+          const conversationsQuery = db.collection('conversations')
+            .where('members', 'array-contains', userId);
+          const conversationsSnapshot = await conversationsQuery.get();
+          
+          for (const convDoc of conversationsSnapshot.docs) {
+            const convId = convDoc.id;
+            
+            // Delete all messages in the conversation
+            const messagesRef = db.collection('conversations').doc(convId).collection('messages');
+            const messagesSnapshot = await messagesRef.get();
+            
+            // Delete messages in batches (Firestore limit is 500 per batch)
+            const batches = [];
+            let currentBatch = db.batch();
+            let count = 0;
+            
+            for (const msgDoc of messagesSnapshot.docs) {
+              currentBatch.delete(msgDoc.ref);
+              count++;
+              stats.messagesDeleted++;
+              
+              if (count >= 500) {
+                batches.push(currentBatch);
+                currentBatch = db.batch();
+                count = 0;
+              }
+            }
+            
+            if (count > 0) {
+              batches.push(currentBatch);
+            }
+            
+            // Execute batches
+            for (const batch of batches) {
+              await batch.commit();
+            }
+            
+            // Delete conversation document
+            await convDoc.ref.delete();
+            stats.conversationsDeleted++;
+            console.log(`  ✓ Deleted conversation ${convId} and ${messagesSnapshot.size} messages`);
+          }
+          
+          // 2. Delete user profile document
+          await db.collection('users').doc(userId).delete();
+          console.log(`  ✓ Deleted user profile for ${userId}`);
+          
+          // 3. Optionally delete Firebase Auth account
+          try {
+            await auth.deleteUser(userId);
+            console.log(`  ✓ Deleted Firebase Auth account for ${userId}`);
+          } catch (authError) {
+            // Auth account might already be deleted or not exist
+            console.log(`  ⚠️ Could not delete Auth account for ${userId}: ${authError.message}`);
+          }
+          
+          stats.usersDeleted++;
+          console.log(`✅ Completed cleanup for user ${userId}`);
+          
+        } catch (error) {
+          console.error(`❌ Error cleaning up user ${userId}:`, error);
+          stats.errors.push({ userId, error: error.message });
+        }
+      }
+      
+      console.log(`✅ Cleanup completed. Stats:`, stats);
+      return { success: true, stats };
+      
+    } catch (error) {
+      console.error('❌ Cleanup function error:', error);
+      return { success: false, error: error.message, stats };
+    }
+  });
+
+// Manual trigger for cleanup (HTTP endpoint for testing)
+exports.cleanupInactiveUsersManual = functions
+  .runWith({ timeoutSeconds: 540 })
+  .https.onRequest(async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    
+    if (req.method === 'OPTIONS') {
+      return res.status(200).end();
+    }
+    
+    // Require authentication for manual trigger
+    const authHeader = req.headers.authorization;
+    const idToken = authHeader?.split('Bearer ')[1];
+    
+    if (!idToken) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    
+    try {
+      const decodedToken = await admin.auth().verifyIdToken(idToken);
+      // Check if user is admin (you can add admin check here)
+      console.log('Manual cleanup triggered by:', decodedToken.uid);
+    } catch (error) {
+      return res.status(401).json({ error: 'Invalid authentication token' });
+    }
+    
+    const dryRun = req.query.dryRun === 'true' || req.body?.dryRun === true;
+    const inactivityDays = parseInt(req.query.days || req.body?.days || '90');
+    
+    // Set environment variables for this run
+    process.env.CLEANUP_DRY_RUN = dryRun ? 'true' : 'false';
+    process.env.CLEANUP_INACTIVITY_DAYS = inactivityDays.toString();
+    
+    // Call the cleanup logic (same as scheduled function)
+    const db = admin.firestore();
+    const auth = admin.auth();
+    
+    const MIN_INACTIVITY_MS = inactivityDays * 24 * 60 * 60 * 1000;
+    const cutoffDate = new Date(Date.now() - MIN_INACTIVITY_MS);
+    
+    console.log(`🧹 Manual cleanup (dry-run: ${dryRun}, inactivity threshold: ${inactivityDays} days)`);
+    
+    const stats = {
+      usersChecked: 0,
+      usersIdentified: 0,
+      usersDeleted: 0,
+      conversationsDeleted: 0,
+      messagesDeleted: 0,
+      errors: []
+    };
+    
+    try {
+      const usersSnapshot = await db.collection('users').get();
+      stats.usersChecked = usersSnapshot.size;
+      
+      const usersToDelete = [];
+      
+      for (const userDoc of usersSnapshot.docs) {
+        const userId = userDoc.id;
+        const userData = userDoc.data();
+        
+        const lastActivity = userData.lastLoginAt || userData.updatedAt || userData.createdAt;
+        let lastActivityDate = null;
+        
+        if (lastActivity) {
+          if (lastActivity.toDate) {
+            lastActivityDate = lastActivity.toDate();
+          } else if (lastActivity._seconds) {
+            lastActivityDate = new Date(lastActivity._seconds * 1000);
+          }
+        }
+        
+        let authLastSignIn = null;
+        try {
+          const authUser = await auth.getUser(userId);
+          if (authUser.metadata.lastSignInTime) {
+            authLastSignIn = new Date(authUser.metadata.lastSignInTime);
+          }
+        } catch (err) {
+          // User might not exist in Auth
+        }
+        
+        const mostRecentActivity = lastActivityDate && authLastSignIn
+          ? (lastActivityDate > authLastSignIn ? lastActivityDate : authLastSignIn)
+          : (lastActivityDate || authLastSignIn);
+        
+        if (mostRecentActivity && mostRecentActivity < cutoffDate) {
+          usersToDelete.push({ userId, lastActivity: mostRecentActivity.toISOString() });
+        }
+      }
+      
+      stats.usersIdentified = usersToDelete.length;
+      
+      if (dryRun) {
+        return res.json({ 
+          success: true, 
+          dryRun: true, 
+          stats,
+          usersToDelete: usersToDelete.map(u => ({ id: u.userId, lastActivity: u.lastActivity }))
+        });
+      }
+      
+      // Perform deletions
+      for (const { userId } of usersToDelete) {
+        try {
+          const conversationsQuery = db.collection('conversations')
+            .where('members', 'array-contains', userId);
+          const conversationsSnapshot = await conversationsQuery.get();
+          
+          for (const convDoc of conversationsSnapshot.docs) {
+            const messagesRef = db.collection('conversations').doc(convDoc.id).collection('messages');
+            const messagesSnapshot = await messagesRef.get();
+            
+            const batches = [];
+            let currentBatch = db.batch();
+            let count = 0;
+            
+            for (const msgDoc of messagesSnapshot.docs) {
+              currentBatch.delete(msgDoc.ref);
+              count++;
+              stats.messagesDeleted++;
+              
+              if (count >= 500) {
+                batches.push(currentBatch);
+                currentBatch = db.batch();
+                count = 0;
+              }
+            }
+            
+            if (count > 0) {
+              batches.push(currentBatch);
+            }
+            
+            for (const batch of batches) {
+              await batch.commit();
+            }
+            
+            await convDoc.ref.delete();
+            stats.conversationsDeleted++;
+          }
+          
+          await db.collection('users').doc(userId).delete();
+          
+          try {
+            await auth.deleteUser(userId);
+          } catch (authError) {
+            // Ignore auth errors
+          }
+          
+          stats.usersDeleted++;
+        } catch (error) {
+          stats.errors.push({ userId, error: error.message });
+        }
+      }
+      
+      return res.json({ success: true, stats });
+      
+    } catch (error) {
+      console.error('Manual cleanup error:', error);
+      return res.status(500).json({ success: false, error: error.message, stats });
+    }
+  });
