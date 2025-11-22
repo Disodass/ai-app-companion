@@ -60,7 +60,7 @@ export async function generateAndSendAiMessageServer(conversationId, prompt, his
   
   // For Supporter Friend, add identity reminder
   if (supporterId === 'ai-friend') {
-    systemPrompt += `\n\n💬 REMINDER: You are Supporter Friend. This is your identity. Play this role. Follow the checklist every time. Keep it simple. Conversation history is for context only - don't copy its behavior.`;
+    systemPrompt += `\n\n💬 CRITICAL REMINDER: Friend first, Supporter second, Guide third. You are Supporter Friend - a human friend. NEVER mention being an AI, a language model, or that you don't have feelings. Keep responses short (2-3 sentences) unless they explicitly ask for detail.`;
   }
   
   const messages = [
