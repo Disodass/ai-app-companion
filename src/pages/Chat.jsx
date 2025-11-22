@@ -10,6 +10,8 @@ import {
   sendMessage,
   markConversationRead
 } from "../services/conversationService";
+import { db } from "../firebaseConfig";
+import { doc, setDoc, getDoc, collection, addDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { getSupporterById, AI_FRIEND } from '../data/supporters';
 
 export default function Chat() {
@@ -23,7 +25,6 @@ export default function Chat() {
   const location = useLocation()
   const { darkMode, toggleDarkMode } = useDarkMode()
   const { setMenuOpen } = useMenu()
-  const initOnceRef = useRef(false);
   const unsubRef = useRef(null);
   const messagesEndRef = useRef(null);
 
@@ -34,6 +35,22 @@ export default function Chat() {
   const supporterIcon = supporter.icon
   const supporterVoice = supporter.voice
 
+  // Test mode state (only available for ai-friend)
+  const [testMode, setTestMode] = useState(() => {
+    if (supporterId === 'ai-friend') {
+      const saved = localStorage.getItem('ai-friend-test-mode');
+      return saved === 'true';
+    }
+    return false;
+  });
+
+  // Save test mode to localStorage when it changes
+  useEffect(() => {
+    if (supporterId === 'ai-friend') {
+      localStorage.setItem('ai-friend-test-mode', testMode.toString());
+    }
+  }, [testMode, supporterId]);
+
   // Auto-scroll to bottom when messages change
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -43,20 +60,69 @@ export default function Chat() {
     scrollToBottom();
   }, [messages, sending]);
 
-  // One-shot init: find/create conversation, attach listener
+  // Initialize conversation and attach listener (re-runs when testMode changes)
   useEffect(() => {
     if (!user?.uid) { setLoading(false); return; }
-    if (initOnceRef.current) return;
-    initOnceRef.current = true;
+
+    let isMounted = true;
 
     (async () => {
-      console.log('🔍 Finding or creating supporter conversation for user:', user.uid, 'with supporter:', supporterId);
-      const { id } = await findOrCreateSupporterConversation(user.uid, supporterId);
-      console.log('✅ Using conversation:', id);
-      setConvId(id);
+      // Clean up previous listener
+      if (unsubRef.current) {
+        unsubRef.current();
+        unsubRef.current = null;
+      }
+
+      // Determine conversation ID based on test mode
+      let conversationId;
+      if (testMode && supporterId === 'ai-friend') {
+        // Use test conversation ID
+        conversationId = `test__${user.uid}__ai-friend`;
+        console.log('🧪 TEST MODE: Using test conversation:', conversationId);
+        
+        // Create test conversation if it doesn't exist
+        const testConvRef = doc(db, "conversations", conversationId);
+        const testConvExists = await getDoc(testConvRef);
+        if (!testConvExists.exists()) {
+          await setDoc(testConvRef, {
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+            members: [user.uid],
+            memberMeta: { [user.uid]: { lastReadAt: serverTimestamp() } },
+            lastMessage: null,
+            messageCount: 0,
+            supporterId: 'ai-friend',
+            isTestConversation: true
+          });
+          
+          // Add welcome message
+          await addDoc(collection(db, "conversations", conversationId, "messages"), {
+            text: "Welcome to Bestibule Test Mode 👋 (Fresh conversation for testing)",
+            authorId: 'assistant',
+            createdAt: serverTimestamp(),
+            status: "sent",
+            meta: { role: "ai" }
+          });
+          
+          await updateDoc(testConvRef, { messageCount: 1 });
+        }
+      } else {
+        // Use normal conversation lookup
+        console.log('🔍 Finding or creating supporter conversation for user:', user.uid, 'with supporter:', supporterId);
+        const { id } = await findOrCreateSupporterConversation(user.uid, supporterId);
+        conversationId = id;
+        console.log('✅ Using conversation:', conversationId);
+      }
+      
+      if (!isMounted) return;
+      
+      setConvId(conversationId);
+      setLoading(true);
+      
       unsubRef.current = listenLatestMessages(
-        id,
+        conversationId,
         (snap) => {
+          if (!isMounted) return;
           const arr = snap.docs.map(d => {
             const data = d.data();
             return {
@@ -71,14 +137,21 @@ export default function Chat() {
           console.log('📥 Snapshot received:', arr.length, 'messages');
           setMessages(arr);
           setLoading(false);
-          markConversationRead(id, user.uid);
+          markConversationRead(conversationId, user.uid);
         },
         500
       );
     })();
 
-    return () => unsubRef.current?.();
-  }, [user?.uid]);
+    return () => {
+      isMounted = false;
+      if (unsubRef.current) {
+        unsubRef.current();
+        unsubRef.current = null;
+      }
+    };
+  }, [user?.uid, testMode, supporterId]);
+
 
   const handleSendMessage = async (e) => {
     e.preventDefault()
@@ -136,10 +209,33 @@ export default function Chat() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           </button>
-                 <h1 className="text-xl font-semibold">{supporterIcon} Bestibule - {supporterName}</h1>
+                 <h1 className="text-xl font-semibold">
+                   {supporterIcon} Bestibule - {supporterName}
+                   {testMode && supporterId === 'ai-friend' && (
+                     <span className="ml-2 text-xs bg-yellow-500 text-yellow-900 px-2 py-1 rounded font-normal">
+                       🧪 TEST MODE
+                     </span>
+                   )}
+                 </h1>
         </div>
         
         <div className="flex items-center space-x-3">
+          {supporterId === 'ai-friend' && (
+            <button
+              onClick={() => {
+                setTestMode(!testMode);
+                setLoading(true);
+              }}
+              className={`px-3 py-1 text-sm rounded-lg transition-colors ${
+                testMode
+                  ? 'bg-yellow-500 text-yellow-900 hover:bg-yellow-600'
+                  : 'bg-theme-secondary text-theme-text hover:bg-theme-secondary/80'
+              }`}
+              title={testMode ? 'Exit test mode' : 'Enter test mode (fresh conversation)'}
+            >
+              {testMode ? '🧪 Exit Test' : '🧪 Test Mode'}
+            </button>
+          )}
           <button
             onClick={handleBack}
             className="p-2 hover:bg-theme-secondary rounded-lg transition-colors"

@@ -31,12 +31,16 @@ export async function findOrCreateSupporterConversation(uid, supporterId) {
       }
       
       if (legacyExists.exists()) {
-        console.log('✅ Found legacy conversation, using:', legacyId);
+        const legacyData = legacyExists.data();
+        const messageCount = legacyData.messageCount || 0;
+        console.log('✅ Found legacy conversation, using:', legacyId, `(${messageCount} messages)`);
         return { id: legacyId };
       }
       
       if (legacyExistsDouble.exists()) {
-        console.log('✅ Found legacy conversation (double underscore), using:', legacyIdDouble);
+        const legacyDataDouble = legacyExistsDouble.data();
+        const messageCountDouble = legacyDataDouble.messageCount || 0;
+        console.log('✅ Found legacy conversation (double underscore), using:', legacyIdDouble, `(${messageCountDouble} messages)`);
         return { id: legacyIdDouble };
       }
       
@@ -46,8 +50,12 @@ export async function findOrCreateSupporterConversation(uid, supporterId) {
       try {
         const supporterConvExists = await getDoc(supporterConvRef);
         if (supporterConvExists.exists()) {
-          console.log('✅ Found existing supporter conversation:', supporterConvId);
+          const supporterData = supporterConvExists.data();
+          const messageCount = supporterData.messageCount || 0;
+          console.log('✅ Found existing supporter conversation:', supporterConvId, `(${messageCount} messages)`);
           return { id: supporterConvId };
+        } else {
+          console.log('📋 Supporter conversation does not exist:', supporterConvId);
         }
       } catch (err) {
         console.warn('⚠️ Error checking supporter conversation:', err);
@@ -77,7 +85,8 @@ export async function findOrCreateSupporterConversation(uid, supporterId) {
           // Prefer conversations with supporterId matching 'ai-friend'
           const aiFriendConv = conversations.find(c => c.data.supporterId === 'ai-friend');
           if (aiFriendConv) {
-            console.log('✅ Found existing ai-friend conversation:', aiFriendConv.id);
+            const msgCount = aiFriendConv.data.messageCount || 0;
+            console.log('✅ Found existing ai-friend conversation:', aiFriendConv.id, `(${msgCount} messages)`);
             return { id: aiFriendConv.id };
           }
           
@@ -87,8 +96,10 @@ export async function findOrCreateSupporterConversation(uid, supporterId) {
           );
           
           if (sortedByMessages.length > 0) {
-            console.log('✅ Found existing conversation with messages:', sortedByMessages[0].id);
-            return { id: sortedByMessages[0].id };
+            const topConv = sortedByMessages[0];
+            const msgCount = topConv.data.messageCount || 0;
+            console.log('✅ Found existing conversation with messages:', topConv.id, `(${msgCount} messages)`);
+            return { id: topConv.id };
           }
         } else {
           console.log('📋 No conversations found with members array containing user');
@@ -141,9 +152,12 @@ export async function findOrCreateSupporterConversation(uid, supporterId) {
         await updateDoc(convRef, { messageCount: 1 });
       }
     } else {
-      console.log('✅ Using existing supporter conversation:', convId);
+      const existingData = existing.data();
+      const messageCount = existingData.messageCount || 0;
+      console.log('✅ Using existing supporter conversation:', convId, `(${messageCount} messages)`);
     }
     
+    console.log('🎯 Final conversation ID selected:', convId);
     return { id: convId };
     
   } catch (error) {
@@ -160,16 +174,30 @@ export async function findOrCreatePrimaryConversation(uid) {
 }
 
 export function listenLatestMessages(conversationId, callback, pageSize = 500) {
-  console.log('👂 Setting up listener for conversation:', conversationId);
+  console.log('👂 Setting up listener for conversation:', conversationId, `(limit: ${pageSize} messages)`);
   
   const messagesRef = collection(db, "conversations", conversationId, "messages");
   const q = query(messagesRef, orderBy("createdAt", "desc"), limit(pageSize));
   
   return onSnapshot(q, (snapshot) => {
-    console.log('📥 Snapshot received:', snapshot.docs.length, 'messages');
+    const messageCount = snapshot.docs.length;
+    const hasMore = messageCount >= pageSize;
+    console.log(`📥 Snapshot received: ${messageCount} messages${hasMore ? ` (may have more, limit reached)` : ''} from conversation: ${conversationId}`);
+    
+    // Log first and last message timestamps for debugging
+    if (messageCount > 0) {
+      const firstMsg = snapshot.docs[0].data();
+      const lastMsg = snapshot.docs[messageCount - 1].data();
+      const firstTime = firstMsg.createdAt?.toDate?.() || 'unknown';
+      const lastTime = lastMsg.createdAt?.toDate?.() || 'unknown';
+      console.log(`📅 Message time range: ${lastTime} (oldest) to ${firstTime} (newest)`);
+    }
+    
     callback(snapshot);
   }, (error) => {
-    console.error('❌ Messages listener error:', error);
+    console.error('❌ Messages listener error for conversation:', conversationId, error);
+    console.error('Error code:', error.code);
+    console.error('Error message:', error.message);
   });
 }
 

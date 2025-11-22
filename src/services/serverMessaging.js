@@ -71,8 +71,8 @@ export async function generateAndSendAiMessageServer(conversationId, prompt, his
 
   try {
     // Call Groq API via Cloud Function (server-side)
-    // For Supporter Friend, use lower max_tokens to encourage short responses by default
-    const maxTokens = supporterId === 'ai-friend' ? 150 : undefined; // Encourage short responses, still allows flexibility when explicitly requested
+    // For Supporter Friend, use moderate max_tokens to allow complete responses while prompt encourages brevity
+    const maxTokens = supporterId === 'ai-friend' ? 400 : undefined; // Allows complete responses, prompt still encourages 2-3 sentences
     const temperature = supporterId === 'ai-friend' ? 0.2 : 0.6; // Lower temperature (0.2) for better instruction following
     const data = await getAiReply({
       model,
