@@ -364,10 +364,181 @@ exports.dumpConversation = functions
     }
   });
 
+// DEPRECATED: No longer needed - conversation lookup now uses collectionGroup to automatically find best conversation
+// Keeping for reference but should not be used
 // Merge migrated conversation history into live DM conversation (HTTP endpoint)
 exports.mergeHistory = functions
   .runWith({ timeoutSeconds: 540 })
   .https.onRequest(async (req, res) => {
+    return res.status(410).json({ 
+      error: 'This function is deprecated. Conversation lookup now automatically finds the conversation with most messages.',
+      message: 'Use findOrCreateSupporterConversation which uses collectionGroup to find all conversations.'
+    });
+    
+    /* DEPRECATED CODE - Commented out
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (req.method === 'OPTIONS') {
+      return res.status(200).end();
+    }
+
+    const userId = req.query.userId || req.body?.userId;
+    const targetConvId = req.query.convId || req.body?.convId || (userId ? `dm__${userId}` : null);
+
+    if (!userId) {
+      return res.status(400).json({ error: 'userId query parameter required' });
+    }
+
+    try {
+      const db = admin.firestore();
+      const targetConvRef = db.collection('conversations').doc(targetConvId);
+      
+      // Ensure target conversation exists
+      const targetSnap = await targetConvRef.get();
+      if (!targetSnap.exists) {
+        await targetConvRef.set({
+          members: [userId],
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          messageCount: 0,
+        }, { merge: true });
+      }
+
+      // Find all migrated conversations for this user
+      const migratedSnap = await db
+        .collection('conversations')
+        .where('migratedFrom', 'in', [userId, `dm_${userId}`, `dm__${userId}`])
+        .get();
+
+      console.log(`Found ${migratedSnap.size} migrated conversations`);
+
+      // Collect all messages with timestamps
+      const allMessages = [];
+      const seenIds = new Set();
+
+      // Also check existing messages in target to avoid duplicates
+      const existingSnap = await targetConvRef.collection('messages').get();
+      existingSnap.docs.forEach(doc => {
+        const data = doc.data();
+        if (data.createdAt) {
+          const ts = data.createdAt.toMillis ? data.createdAt.toMillis() : 
+                     (data.createdAt._seconds * 1000 + (data.createdAt._nanoseconds || 0) / 1000000);
+          seenIds.add(`${ts}_${data.text?.slice(0, 50)}`);
+        }
+      });
+
+      for (const migratedDoc of migratedSnap.docs) {
+        const migratedData = migratedDoc.data();
+        const messages = migratedData.messages || [];
+        
+        console.log(`Processing migrated conversation ${migratedDoc.id} with ${messages.length} messages`);
+
+        for (const msg of messages) {
+          // Normalize timestamp
+          let timestamp;
+          if (msg.timestamp) {
+            if (msg.timestamp._seconds) {
+              timestamp = admin.firestore.Timestamp.fromMillis(
+                msg.timestamp._seconds * 1000 + (msg.timestamp._nanoseconds || 0) / 1000000
+              );
+            } else if (typeof msg.timestamp === 'string') {
+              timestamp = admin.firestore.Timestamp.fromDate(new Date(msg.timestamp));
+            } else if (msg.timestamp.toDate) {
+              timestamp = admin.firestore.Timestamp.fromDate(msg.timestamp.toDate());
+            } else {
+              timestamp = admin.firestore.Timestamp.fromDate(new Date(msg.timestamp));
+            }
+          } else {
+            continue; // Skip messages without timestamps
+          }
+
+          // Create dedupe key
+          const dedupeKey = `${timestamp.toMillis()}_${(msg.text || '').slice(0, 50)}`;
+          if (seenIds.has(dedupeKey)) {
+            continue; // Skip duplicates
+          }
+          seenIds.add(dedupeKey);
+
+          // Map sender to authorId
+          let authorId = userId;
+          if (msg.sender === 'supporter' || msg.sender === 'ai' || msg.sender === 'assistant') {
+            authorId = 'assistant';
+          } else if (msg.sender === 'user') {
+            authorId = userId;
+          } else if (msg.authorId) {
+            authorId = msg.authorId;
+          }
+
+          allMessages.push({
+            text: msg.text || '',
+            authorId: authorId,
+            uid: userId,
+            createdAt: timestamp,
+            status: 'sent',
+            meta: {
+              role: authorId === 'assistant' ? 'ai' : 'user',
+              migratedFrom: migratedDoc.id,
+            },
+          });
+        }
+      }
+
+      // Sort by timestamp
+      allMessages.sort((a, b) => a.createdAt.toMillis() - b.createdAt.toMillis());
+
+      console.log(`Merging ${allMessages.length} messages into ${targetConvId}`);
+
+      // Batch write messages (Firestore limit is 500 per batch)
+      const batches = [];
+      let currentBatch = db.batch();
+      let count = 0;
+
+      for (const msg of allMessages) {
+        const msgRef = targetConvRef.collection('messages').doc();
+        currentBatch.set(msgRef, msg);
+        count++;
+
+        if (count >= 500) {
+          batches.push(currentBatch);
+          currentBatch = db.batch();
+          count = 0;
+        }
+      }
+
+      if (count > 0) {
+        batches.push(currentBatch);
+      }
+
+      // Execute batches
+      for (const b of batches) {
+        await b.commit();
+      }
+
+      // Update conversation metadata
+      const lastMessage = allMessages[allMessages.length - 1];
+      const totalCount = existingSnap.size + allMessages.length;
+
+      await targetConvRef.update({
+        messageCount: totalCount,
+        lastMessage: lastMessage?.text || null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        [`memberMeta.${userId}.lastReadAt`]: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      return res.json({
+        success: true,
+        merged: allMessages.length,
+        total: totalCount,
+        conversationId: targetConvId,
+      });
+    } catch (error) {
+      console.error('mergeConversationHistory error:', error);
+      return res.status(500).json({ error: `Merge failed: ${error.message}` });
+    }
+    */
+  });
     res.set('Access-Control-Allow-Origin', '*');
     res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.set('Access-Control-Allow-Headers', 'Content-Type');
@@ -1261,5 +1432,126 @@ exports.cleanupInactiveUsersManual = functions
     } catch (error) {
       console.error('Manual cleanup error:', error);
       return res.status(500).json({ success: false, error: error.message, stats });
+    }
+  });
+
+// Clean up deprecated conversations (marked as deprecated by findOrCreateSupporterConversation)
+exports.cleanupDeprecatedConversations = functions
+  .runWith({ timeoutSeconds: 540 })
+  .https.onRequest(async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (req.method === 'OPTIONS') {
+      return res.status(200).end();
+    }
+
+    const dryRun = req.query.dryRun !== 'false' && req.query.dryRun !== false; // Default to true for safety
+    const daysOld = parseInt(req.query.daysOld || '7', 10); // Only delete if deprecated for 7+ days
+
+    try {
+      const db = admin.firestore();
+      const stats = {
+        found: 0,
+        deleted: 0,
+        messagesDeleted: 0,
+        errors: []
+      };
+
+      // Find all deprecated conversations
+      const deprecatedQuery = db.collection('conversations')
+        .where('deprecated', '==', true);
+      
+      const deprecatedSnapshot = await deprecatedQuery.get();
+      stats.found = deprecatedSnapshot.size;
+
+      console.log(`📋 Found ${stats.found} deprecated conversations`);
+
+      if (deprecatedSnapshot.empty) {
+        return res.json({
+          success: true,
+          message: 'No deprecated conversations found',
+          stats
+        });
+      }
+
+      const now = Date.now();
+      const cutoffTime = now - (daysOld * 24 * 60 * 60 * 1000);
+
+      for (const convDoc of deprecatedSnapshot.docs) {
+        try {
+          const convData = convDoc.data();
+          const consolidatedAt = convData.consolidatedAt;
+          
+          // Check if deprecated long enough
+          if (consolidatedAt) {
+            const consolidatedTime = consolidatedAt.toMillis ? consolidatedAt.toMillis() : 
+                                    (consolidatedAt._seconds * 1000 + (consolidatedAt._nanoseconds || 0) / 1000000);
+            
+            if (consolidatedTime > cutoffTime) {
+              console.log(`⏳ Skipping ${convDoc.id} - deprecated ${Math.round((now - consolidatedTime) / (24 * 60 * 60 * 1000))} days ago (need ${daysOld} days)`);
+              continue;
+            }
+          }
+
+          console.log(`🗑️ Processing deprecated conversation: ${convDoc.id}`);
+
+          if (!dryRun) {
+            // Delete all messages
+            const messagesRef = convDoc.ref.collection('messages');
+            const messagesSnapshot = await messagesRef.get();
+            
+            const batches = [];
+            let currentBatch = db.batch();
+            let count = 0;
+            
+            for (const msgDoc of messagesSnapshot.docs) {
+              currentBatch.delete(msgDoc.ref);
+              count++;
+              stats.messagesDeleted++;
+              
+              if (count >= 500) {
+                batches.push(currentBatch);
+                currentBatch = db.batch();
+                count = 0;
+              }
+            }
+            
+            if (count > 0) {
+              batches.push(currentBatch);
+            }
+            
+            for (const batch of batches) {
+              await batch.commit();
+            }
+            
+            // Delete the conversation document
+            await convDoc.ref.delete();
+            stats.deleted++;
+            
+            console.log(`✅ Deleted deprecated conversation ${convDoc.id} (${messagesSnapshot.size} messages)`);
+          } else {
+            const messagesSnapshot = await convDoc.ref.collection('messages').get();
+            console.log(`[DRY RUN] Would delete ${convDoc.id} (${messagesSnapshot.size} messages)`);
+            stats.deleted++;
+            stats.messagesDeleted += messagesSnapshot.size;
+          }
+        } catch (error) {
+          console.error(`❌ Error processing ${convDoc.id}:`, error);
+          stats.errors.push({ conversationId: convDoc.id, error: error.message });
+        }
+      }
+
+      return res.json({
+        success: true,
+        dryRun,
+        daysOld,
+        stats
+      });
+      
+    } catch (error) {
+      console.error('Cleanup deprecated conversations error:', error);
+      return res.status(500).json({ success: false, error: error.message });
     }
   });

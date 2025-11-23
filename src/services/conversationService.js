@@ -1,149 +1,137 @@
 import { collection, collectionGroup, query, where, orderBy, limit, onSnapshot, addDoc, doc, setDoc, serverTimestamp, updateDoc, getDocs, getDoc } from "firebase/firestore";
 import { db, auth } from "../firebaseConfig";
 
-// Helper function to get actual message count from subcollection (more reliable than messageCount field)
-async function getActualMessageCount(conversationId) {
+// Helper function to get message count efficiently (uses messageCount field if available, otherwise counts)
+async function getMessageCount(conversationId, storedCount = null) {
   try {
+    // If we have a stored count and it's > 0, use it (faster)
+    if (storedCount !== null && storedCount > 0) {
+      // Verify by checking if messages exist
+      const messagesRef = collection(db, "conversations", conversationId, "messages");
+      const checkSnapshot = await getDocs(query(messagesRef, limit(1)));
+      if (checkSnapshot.size > 0) {
+        return storedCount; // Trust stored count if messages exist
+      }
+    }
+    
+    // Otherwise, count actual messages (slower but accurate)
     const messagesRef = collection(db, "conversations", conversationId, "messages");
-    const messagesSnapshot = await getDocs(query(messagesRef, limit(1)));
-    // If we can access messages, count them properly
     const countSnapshot = await getDocs(messagesRef);
     return countSnapshot.size;
   } catch (error) {
     console.warn(`⚠️ Could not count messages for ${conversationId}:`, error.message);
-    return 0;
+    return storedCount || 0;
   }
 }
 
 // Find or create a conversation for a specific supporter
+// Since user is the only user, find conversation with MOST messages regardless of structure
 export async function findOrCreateSupporterConversation(uid, supporterId) {
-  console.log('🔍 Finding or creating conversation for user:', uid, 'with supporter:', supporterId);
+  console.log('🔍 Finding conversation with most messages (user is only user):', uid, 'supporter:', supporterId);
   
   try {
-    const candidateConversations = [];
+    // PRIMARY METHOD: Use collectionGroup to find ALL messages across ALL conversations
+    // This works regardless of conversation structure, ID format, or membership fields
+    console.log('📊 Searching ALL messages across ALL conversations using collectionGroup...');
     
-    // Step 1: Check all known conversation ID formats
-    const knownIds = [
-      `dm_${uid}`,                    // Legacy single underscore
-      `dm__${uid}`,                   // Legacy double underscore
-      `supporter__${uid}__ai-friend`, // Standard supporter format
-      `supporter__${uid}__supporter_friend`, // Alternative format
-    ];
+    let conversationCounts = new Map(); // conversationId -> messageCount
     
-    console.log('📋 Checking known conversation IDs:', knownIds);
-    
-    for (const convId of knownIds) {
-      try {
-        const convRef = doc(db, "conversations", convId);
-        const convSnap = await getDoc(convRef);
-        
-        if (convSnap.exists()) {
-          const actualCount = await getActualMessageCount(convId);
-          const data = convSnap.data();
-          
-          candidateConversations.push({
-            id: convId,
-            messageCount: actualCount,
-            storedMessageCount: data.messageCount || 0,
-            supporterId: data.supporterId,
-            hasMembers: Array.isArray(data.members) && data.members.includes(uid),
-            data: data
-          });
-          
-          console.log(`✅ Found conversation ${convId}: ${actualCount} actual messages (stored: ${data.messageCount || 0})`);
-        }
-      } catch (err) {
-        console.warn(`⚠️ Error checking ${convId}:`, err.message);
-      }
-    }
-    
-    // Step 2: Query all conversations where user is a member
     try {
-      const conversationsQuery = query(
-        collection(db, "conversations"),
-        where("members", "array-contains", uid)
-      );
+      // Get all messages from all conversations
+      const allMessagesQuery = query(collectionGroup(db, "messages"), limit(10000)); // Limit to prevent timeout
+      const allMessagesSnapshot = await getDocs(allMessagesQuery);
       
-      const conversationsSnapshot = await getDocs(conversationsQuery);
-      console.log('📋 Query returned', conversationsSnapshot.docs.length, 'conversations with members array');
+      console.log(`📥 Found ${allMessagesSnapshot.size} total messages across all conversations`);
       
-      for (const docSnap of conversationsSnapshot.docs) {
-        const convId = docSnap.id;
-        // Skip if we already checked this ID
-        if (candidateConversations.find(c => c.id === convId)) {
-          continue;
+      // Group messages by conversation ID (extract from document path)
+      for (const messageDoc of allMessagesSnapshot.docs) {
+        const pathParts = messageDoc.ref.path.split('/');
+        // Path format: conversations/{conversationId}/messages/{messageId}
+        if (pathParts.length >= 3 && pathParts[0] === 'conversations') {
+          const conversationId = pathParts[1];
+          conversationCounts.set(conversationId, (conversationCounts.get(conversationId) || 0) + 1);
         }
+      }
+      
+      console.log(`📋 Found ${conversationCounts.size} unique conversations with messages`);
+      
+      // Convert to array and sort by message count
+      const conversations = Array.from(conversationCounts.entries())
+        .map(([id, count]) => ({ id, messageCount: count }))
+        .sort((a, b) => b.messageCount - a.messageCount);
+      
+      if (conversations.length > 0) {
+        const bestConv = conversations[0];
+        console.log(`✅ Found conversation with most messages: ${bestConv.id} (${bestConv.messageCount} messages)`);
         
-        try {
-          const actualCount = await getActualMessageCount(convId);
-          const data = docSnap.data();
-          
-          candidateConversations.push({
-            id: convId,
-            messageCount: actualCount,
-            storedMessageCount: data.messageCount || 0,
-            supporterId: data.supporterId,
-            hasMembers: true,
-            data: data
-          });
-          
-          console.log(`✅ Found conversation ${convId} via query: ${actualCount} actual messages`);
-        } catch (err) {
-          console.warn(`⚠️ Error counting messages for ${convId}:`, err.message);
-        }
-      }
-    } catch (queryError) {
-      console.error('❌ Query for conversations failed:', queryError);
-      console.error('Error code:', queryError.code);
-      // Continue - we may have found conversations via direct ID checks
-    }
-    
-    // Step 3: Filter and sort candidates
-    // Only consider conversations that actually have messages
-    const conversationsWithMessages = candidateConversations.filter(c => c.messageCount > 0);
-    
-    if (conversationsWithMessages.length > 0) {
-      // Sort by actual message count (descending)
-      conversationsWithMessages.sort((a, b) => b.messageCount - a.messageCount);
-      
-      // Prefer conversations matching the requested supporterId
-      if (supporterId === 'ai-friend') {
-        const aiFriendConv = conversationsWithMessages.find(c => 
-          c.supporterId === 'ai-friend' || c.id.includes('ai-friend')
-        );
-        if (aiFriendConv) {
-          console.log(`✅ Selected conversation with most messages matching ai-friend: ${aiFriendConv.id} (${aiFriendConv.messageCount} messages)`);
-          return { id: aiFriendConv.id };
-        }
-      }
-      
-      // Otherwise, use the conversation with the most messages
-      const bestConv = conversationsWithMessages[0];
-      console.log(`✅ Selected conversation with most messages: ${bestConv.id} (${bestConv.messageCount} messages)`);
-      
-      // If multiple conversations exist, mark others as deprecated (don't delete)
-      if (conversationsWithMessages.length > 1) {
-        console.log(`⚠️ Found ${conversationsWithMessages.length} conversations with messages. Marking others as deprecated.`);
-        for (let i = 1; i < conversationsWithMessages.length; i++) {
-          const depConv = conversationsWithMessages[i];
-          try {
-            const depRef = doc(db, "conversations", depConv.id);
-            await updateDoc(depRef, {
-              deprecated: true,
-              consolidatedInto: bestConv.id,
-              consolidatedAt: serverTimestamp()
-            });
-            console.log(`📋 Marked ${depConv.id} as deprecated`);
-          } catch (err) {
-            console.warn(`⚠️ Could not mark ${depConv.id} as deprecated:`, err.message);
+        // Log all conversations found
+        console.log('📋 All conversations found:', conversations.map(c => `${c.id}: ${c.messageCount} messages`).join(', '));
+        
+        // If multiple conversations exist, mark others as deprecated
+        if (conversations.length > 1) {
+          console.log(`⚠️ Found ${conversations.length} conversations. Marking others as deprecated.`);
+          for (let i = 1; i < conversations.length; i++) {
+            const depConv = conversations[i];
+            try {
+              const depRef = doc(db, "conversations", depConv.id);
+              await updateDoc(depRef, {
+                deprecated: true,
+                consolidatedInto: bestConv.id,
+                consolidatedAt: serverTimestamp()
+              });
+              console.log(`📋 Marked ${depConv.id} (${depConv.messageCount} messages) as deprecated`);
+            } catch (err) {
+              console.warn(`⚠️ Could not mark ${depConv.id} as deprecated:`, err.message);
+            }
           }
         }
+        
+        return { id: bestConv.id };
+      }
+    } catch (collectionGroupError) {
+      console.error('❌ collectionGroup search failed:', collectionGroupError);
+      console.error('Error code:', collectionGroupError.code);
+      console.error('Falling back to known ID format checks...');
+      
+      // FALLBACK: Check known conversation ID formats
+      const knownIds = [
+        `dm_${uid}`,
+        `dm__${uid}`,
+        `supporter__${uid}__ai-friend`,
+        `supporter__${uid}__supporter_friend`,
+      ];
+      
+      let bestConv = null;
+      let maxCount = 0;
+      
+      for (const convId of knownIds) {
+        try {
+          const convRef = doc(db, "conversations", convId);
+          const convSnap = await getDoc(convRef);
+          
+          if (convSnap.exists()) {
+            const data = convSnap.data();
+            const count = await getMessageCount(convId, data.messageCount);
+            
+            if (count > maxCount) {
+              maxCount = count;
+              bestConv = { id: convId, messageCount: count };
+            }
+            
+            console.log(`✅ Found conversation ${convId}: ${count} messages`);
+          }
+        } catch (err) {
+          console.warn(`⚠️ Error checking ${convId}:`, err.message);
+        }
       }
       
-      return { id: bestConv.id };
+      if (bestConv && bestConv.messageCount > 0) {
+        console.log(`✅ Selected conversation: ${bestConv.id} (${bestConv.messageCount} messages)`);
+        return { id: bestConv.id };
+      }
     }
     
-    // Step 4: No conversations with messages found - create new one
+    // No conversations with messages found - create new one
     console.log('📋 No existing conversations with messages found. Creating new conversation.');
     const convId = `supporter__${uid}__${supporterId}`;
     const convRef = doc(db, "conversations", convId);
@@ -182,7 +170,6 @@ export async function findOrCreateSupporterConversation(uid, supporterId) {
     
   } catch (error) {
     console.error('❌ Error in findOrCreateSupporterConversation:', error);
-    // Don't silently create new conversation on error - throw so caller knows something went wrong
     throw new Error(`Failed to find or create conversation: ${error.message}`);
   }
 }
