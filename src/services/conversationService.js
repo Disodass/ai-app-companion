@@ -1,6 +1,6 @@
 import { collection, query, where, orderBy, limit, onSnapshot, addDoc, doc, setDoc, serverTimestamp, updateDoc, getDocs, getDoc } from "firebase/firestore";
 import { db, auth } from "../firebaseConfig";
-import { encryptMessage, ensureConversationKey, decryptMessage, getConversationKey } from "./encryptionService";
+import { encryptMessage, ensureConversationKey, decryptMessage, getConversationKey } from "./encryptionService.js";
 
 // Helper function to get message count efficiently (uses messageCount field if available, otherwise counts)
 async function getMessageCount(conversationId, storedCount = null) {
@@ -279,11 +279,19 @@ export function listenLatestMessages(conversationId, callback, pageSize = 500) {
     const messageCount = snapshot.docs.length;
     const hasMore = messageCount >= pageSize;
     console.log(`📥 Snapshot received: ${messageCount} messages${hasMore ? ` (may have more, limit reached)` : ''} from conversation: ${conversationId}`);
+    console.log(`📥 Snapshot details: empty=${snapshot.empty}, size=${snapshot.size}, docs.length=${snapshot.docs?.length}`);
     
     // Get current user ID for decryption
     const uid = auth.currentUser?.uid;
     if (!uid) {
       console.warn('⚠️ No user authenticated, cannot decrypt messages');
+      callback(snapshot);
+      return;
+    }
+    
+    // If snapshot is empty, still call callback with empty snapshot
+    if (snapshot.empty || messageCount === 0) {
+      console.log('📭 Empty snapshot - no messages found in conversation:', conversationId);
       callback(snapshot);
       return;
     }
@@ -363,6 +371,28 @@ export function listenLatestMessages(conversationId, callback, pageSize = 500) {
     console.error('❌ Messages listener error for conversation:', conversationId, error);
     console.error('Error code:', error.code);
     console.error('Error message:', error.message);
+    console.error('Error details:', {
+      code: error.code,
+      message: error.message,
+      stack: error.stack
+    });
+    
+    // If it's a missing index error, provide helpful message
+    if (error.code === 'failed-precondition') {
+      console.error('⚠️ Firestore index missing! You may need to create an index for:');
+      console.error('   Collection: conversations/{conversationId}/messages');
+      console.error('   Fields: createdAt (descending)');
+    }
+    
+    // Call callback with empty snapshot-like object to indicate error
+    callback({
+      docs: [],
+      size: 0,
+      empty: true,
+      error: error,
+      metadata: {},
+      query: null
+    });
   });
 }
 

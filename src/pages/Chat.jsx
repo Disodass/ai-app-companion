@@ -19,6 +19,7 @@ export default function Chat() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
   const navigate = useNavigate()
   const location = useLocation()
   const { darkMode, toggleDarkMode } = useDarkMode()
@@ -44,50 +45,119 @@ export default function Chat() {
 
   // Initialize conversation and attach listener
   useEffect(() => {
-    if (!user?.uid) { setLoading(false); return; }
+    if (!user?.uid) { 
+      console.log('⚠️ No user UID, skipping conversation setup');
+      setLoading(false); 
+      return; 
+    }
 
     let isMounted = true;
 
     (async () => {
-      // Clean up previous listener
-      if (unsubRef.current) {
-        unsubRef.current();
-        unsubRef.current = null;
-      }
+      try {
+        // Clean up previous listener
+        if (unsubRef.current) {
+          console.log('🧹 Cleaning up previous listener');
+          unsubRef.current();
+          unsubRef.current = null;
+        }
 
-      // Find or create conversation
-      console.log('🔍 Finding or creating supporter conversation for user:', user.uid, 'with supporter:', supporterId);
-      const { id } = await findOrCreateSupporterConversation(user.uid, supporterId);
-      const conversationId = id;
-      console.log('✅ Using conversation:', conversationId);
-      
-      if (!isMounted) return;
-      
-      setConvId(conversationId);
-      setLoading(true);
+        // Find or create conversation
+        console.log('🔍 Finding or creating supporter conversation for user:', user.uid, 'with supporter:', supporterId);
+        const { id } = await findOrCreateSupporterConversation(user.uid, supporterId);
+        const conversationId = id;
+        console.log('✅ Using conversation:', conversationId);
+        
+        if (!isMounted) {
+          console.log('⚠️ Component unmounted, aborting');
+          return;
+        }
+        
+        setConvId(conversationId);
+        setLoading(true);
       
       unsubRef.current = listenLatestMessages(
         conversationId,
         (snap) => {
           if (!isMounted) return;
-          const arr = snap.docs.map(d => {
-            const data = d.data();
-            return {
-              id: d.id,
-              text: data.text,
-              authorId: data.authorId,
-              meta: data.meta || {},
-              timestamp: data.createdAt?.toDate?.() || new Date(0),
-              status: data.status
-            };
+          
+          console.log('📥 Raw snapshot received:', {
+            size: snap.size,
+            empty: snap.empty,
+            docsLength: snap.docs?.length,
+            conversationId,
+            hasError: !!snap.error
+          });
+          
+          // Check for query errors
+          if (snap.error) {
+            console.error('❌ Snapshot contains error:', snap.error);
+            setError(`Failed to load messages: ${snap.error.message || 'Unknown error'}`);
+            setMessages([]);
+            setLoading(false);
+            return;
+          }
+          
+          if (!snap || !snap.docs) {
+            console.warn('⚠️ Snapshot has no docs array');
+            setMessages([]);
+            setLoading(false);
+            return;
+          }
+          
+          const arr = snap.docs.map((d, index) => {
+            try {
+              const data = d.data();
+              console.log(`📄 Message ${index}:`, {
+                id: d.id,
+                hasText: !!data.text,
+                textLength: data.text?.length || 0,
+                authorId: data.authorId,
+                createdAt: data.createdAt?.toDate?.()?.toISOString() || 'no date',
+                encrypted: data.encrypted
+              });
+              
+              return {
+                id: d.id,
+                text: data.text || '[No text content]',
+                authorId: data.authorId,
+                meta: data.meta || {},
+                timestamp: data.createdAt?.toDate?.() || new Date(0),
+                status: data.status
+              };
+            } catch (error) {
+              console.error(`❌ Error processing message ${index}:`, error);
+              return {
+                id: d.id || `error-${index}`,
+                text: '[Error loading message]',
+                authorId: 'unknown',
+                meta: {},
+                timestamp: new Date(0),
+                status: 'error'
+              };
+            }
           }).reverse();
-          console.log('📥 Snapshot received:', arr.length, 'messages');
+          
+          console.log('📥 Processed messages:', arr.length, 'messages');
+          if (arr.length > 0) {
+            console.log('📥 First message:', arr[0]);
+            console.log('📥 Last message:', arr[arr.length - 1]);
+          }
+          
           setMessages(arr);
           setLoading(false);
-          markConversationRead(conversationId, user.uid);
+          markConversationRead(conversationId, user.uid).catch(err => {
+            console.warn('⚠️ Could not mark conversation as read:', err);
+          });
         },
         500
       );
+      } catch (error) {
+        console.error('❌ Error setting up conversation listener:', error);
+        setError(`Failed to load conversation: ${error.message}`);
+        setLoading(false);
+        setMessages([]);
+      }
     })();
 
     return () => {
@@ -181,6 +251,21 @@ export default function Chat() {
 
       {/* Chat Area */}
       <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Error Display */}
+        {error && (
+          <div className="bg-red-100 dark:bg-red-900 border border-red-400 dark:border-red-700 text-red-700 dark:text-red-200 px-4 py-3 rounded m-4">
+            <div className="flex items-center justify-between">
+              <span>{error}</span>
+              <button
+                onClick={() => setError('')}
+                className="text-red-700 dark:text-red-200 hover:text-red-900 dark:hover:text-red-100"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        )}
+        
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
           {loading ? (
@@ -197,8 +282,21 @@ export default function Chat() {
                          </div>
                          <p className="text-sm text-theme-text-secondary italic">"{supporterVoice}"</p>
                        </div>
-                       {messages.length} messages loaded
+                       <div className="text-xs text-theme-text-muted">
+                         {messages.length} {messages.length === 1 ? 'message' : 'messages'} loaded
+                         {convId && ` • Conversation: ${convId}`}
+                       </div>
                      </div>
+              {messages.length === 0 && !loading && (
+                <div className="flex justify-center items-center h-full">
+                  <div className="text-center">
+                    <div className="text-theme-text-muted mb-2">No messages yet</div>
+                    <div className="text-sm text-theme-text-secondary">
+                      Start a conversation with {supporterName}!
+                    </div>
+                  </div>
+                </div>
+              )}
               {messages.map((msg) => {
                 // Robust bubble alignment: check both authorId and meta.role
                 const isUser = msg.authorId === user?.uid || msg.meta?.role === 'user';
