@@ -1,5 +1,6 @@
 import { collection, query, where, orderBy, limit, onSnapshot, addDoc, doc, setDoc, serverTimestamp, updateDoc, getDocs, getDoc } from "firebase/firestore";
 import { db, auth } from "../firebaseConfig";
+import { encryptMessage, ensureConversationKey, decryptMessage, getConversationKey } from "./encryptionService";
 
 // Helper function to get message count efficiently (uses messageCount field if available, otherwise counts)
 async function getMessageCount(conversationId, storedCount = null) {
@@ -38,6 +39,45 @@ async function verifyUserIsMember(conversationId, uid) {
   }
 }
 
+// Safeguard: Ensure conversation has members array (migrates old conversations)
+export async function ensureConversationHasMembers(conversationId, uid) {
+  try {
+    const convRef = doc(db, "conversations", conversationId);
+    const convSnap = await getDoc(convRef);
+    
+    if (!convSnap.exists()) {
+      return false;
+    }
+    
+    const convData = convSnap.data();
+    
+    // If no members array, add it
+    if (!Array.isArray(convData.members)) {
+      console.log(`🔄 Migrating conversation ${conversationId} - adding members array`);
+      await updateDoc(convRef, {
+        members: [uid],
+        updatedAt: serverTimestamp()
+      });
+      return true;
+    }
+    
+    // If members array exists but doesn't include user, add user
+    if (!convData.members.includes(uid)) {
+      console.log(`🔄 Adding user to members array in conversation ${conversationId}`);
+      await updateDoc(convRef, {
+        members: [...convData.members, uid],
+        updatedAt: serverTimestamp()
+      });
+      return true;
+    }
+    
+    return false;
+  } catch (error) {
+    console.error(`❌ Error ensuring members array for ${conversationId}:`, error);
+    return false;
+  }
+}
+
 // Find or create a conversation for a specific supporter
 // CRITICAL: Only queries conversations where user is a member to ensure data isolation
 export async function findOrCreateSupporterConversation(uid, supporterId) {
@@ -53,7 +93,85 @@ export async function findOrCreateSupporterConversation(uid, supporterId) {
     const conversationsSnapshot = await getDocs(conversationsQuery);
     console.log(`📋 Found ${conversationsSnapshot.size} conversations where user is a member`);
     
-    if (conversationsSnapshot.empty) {
+    // STEP 1.5: Also check legacy conversation IDs directly (for old conversations without members array)
+    const legacyIds = [
+      `dm_${uid}`,
+      `dm__${uid}`,
+      `supporter__${uid}__ai-friend`,
+      `supporter__${uid}__supporter_friend`,
+      `supporter__${uid}__${supporterId}`,
+    ];
+    
+    const legacyConversations = [];
+    for (const convId of legacyIds) {
+      try {
+        const convRef = doc(db, "conversations", convId);
+        const convSnap = await getDoc(convRef);
+        
+        if (convSnap.exists()) {
+          const convData = convSnap.data();
+          // Check if conversation has messages (by checking if user sent messages or it has messageCount)
+          const messageCount = await getMessageCount(convId, convData.messageCount);
+          
+          // If no members array, add it now (migration)
+          if (!Array.isArray(convData.members)) {
+            console.log(`🔄 Migrating legacy conversation ${convId} - adding members array`);
+            await updateDoc(convRef, {
+              members: [uid],
+              updatedAt: serverTimestamp()
+            });
+          }
+          
+          legacyConversations.push({
+            id: convId,
+            messageCount: messageCount,
+            supporterId: convData.supporterId,
+            data: convData
+          });
+          
+          console.log(`✅ Found legacy conversation ${convId}: ${messageCount} messages`);
+        }
+      } catch (err) {
+        console.warn(`⚠️ Error checking legacy conversation ${convId}:`, err.message);
+      }
+    }
+    
+    // STEP 2: Count messages for each conversation and verify user membership
+    const conversationsWithCounts = [];
+    
+    // Add conversations from members query
+    for (const convDoc of conversationsSnapshot.docs) {
+      const convId = convDoc.id;
+      const convData = convDoc.data();
+      
+      // Skip if already found in legacy check
+      if (legacyConversations.find(l => l.id === convId)) {
+        continue;
+      }
+      
+      // Verify user is actually a member (double-check for security)
+      if (!Array.isArray(convData.members) || !convData.members.includes(uid)) {
+        console.warn(`⚠️ Skipping ${convId} - user not in members array`);
+        continue;
+      }
+      
+      // Count messages for this conversation
+      const messageCount = await getMessageCount(convId, convData.messageCount);
+      
+      conversationsWithCounts.push({
+        id: convId,
+        messageCount: messageCount,
+        supporterId: convData.supporterId,
+        data: convData
+      });
+      
+      console.log(`✅ Conversation ${convId}: ${messageCount} messages (supporterId: ${convData.supporterId || 'none'})`);
+    }
+    
+    // Combine both sets of conversations
+    const allConversations = [...conversationsWithCounts, ...legacyConversations];
+    
+    if (allConversations.length === 0) {
       // No conversations found - create new one
       console.log('📋 No conversations found. Creating new conversation.');
       const convId = `supporter__${uid}__${supporterId}`;
@@ -83,68 +201,12 @@ export async function findOrCreateSupporterConversation(uid, supporterId) {
       return { id: convId };
     }
     
-    // STEP 2: Count messages for each conversation and verify user membership
-    const conversationsWithCounts = [];
-    
-    for (const convDoc of conversationsSnapshot.docs) {
-      const convId = convDoc.id;
-      const convData = convDoc.data();
-      
-      // Verify user is actually a member (double-check for security)
-      if (!Array.isArray(convData.members) || !convData.members.includes(uid)) {
-        console.warn(`⚠️ Skipping ${convId} - user not in members array`);
-        continue;
-      }
-      
-      // Count messages for this conversation
-      const messageCount = await getMessageCount(convId, convData.messageCount);
-      
-      conversationsWithCounts.push({
-        id: convId,
-        messageCount: messageCount,
-        supporterId: convData.supporterId,
-        data: convData
-      });
-      
-      console.log(`✅ Conversation ${convId}: ${messageCount} messages (supporterId: ${convData.supporterId || 'none'})`);
-    }
-    
-    if (conversationsWithCounts.length === 0) {
-      // No valid conversations found - create new one
-      console.log('📋 No valid conversations found. Creating new conversation.');
-      const convId = `supporter__${uid}__${supporterId}`;
-      const convRef = doc(db, "conversations", convId);
-      
-      await setDoc(convRef, {
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        members: [uid],
-        memberMeta: { [uid]: { lastReadAt: serverTimestamp() } },
-        lastMessage: null,
-        messageCount: 0,
-        supporterId: supporterId
-      });
-      
-      // Add welcome message
-      await addDoc(collection(db, "conversations", convId, "messages"), {
-        text: "Welcome to Bestibule 👋",
-        authorId: 'assistant',
-        createdAt: serverTimestamp(),
-        status: "sent",
-        meta: { role: "ai" }
-      });
-      
-      await updateDoc(convRef, { messageCount: 1 });
-      console.log('🎯 Created new conversation:', convId);
-      return { id: convId };
-    }
-    
     // STEP 3: Filter by supporterId if specified, then sort by message count
-    let candidates = conversationsWithCounts;
+    let candidates = allConversations;
     
     if (supporterId) {
       // Prefer conversations matching the requested supporterId
-      const matchingSupporter = conversationsWithCounts.filter(c => 
+      const matchingSupporter = allConversations.filter(c => 
         c.supporterId === supporterId || c.id.includes(supporterId)
       );
       
@@ -190,6 +252,9 @@ export async function findOrCreateSupporterConversation(uid, supporterId) {
       }
     }
     
+    // Ensure conversation has members array (safeguard for future)
+    await ensureConversationHasMembers(bestConv.id, uid);
+    
     console.log('🎯 Final conversation ID selected:', bestConv.id);
     return { id: bestConv.id };
     
@@ -210,10 +275,79 @@ export function listenLatestMessages(conversationId, callback, pageSize = 500) {
   const messagesRef = collection(db, "conversations", conversationId, "messages");
   const q = query(messagesRef, orderBy("createdAt", "desc"), limit(pageSize));
   
-  return onSnapshot(q, (snapshot) => {
+  return onSnapshot(q, async (snapshot) => {
     const messageCount = snapshot.docs.length;
     const hasMore = messageCount >= pageSize;
     console.log(`📥 Snapshot received: ${messageCount} messages${hasMore ? ` (may have more, limit reached)` : ''} from conversation: ${conversationId}`);
+    
+    // Get current user ID for decryption
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      console.warn('⚠️ No user authenticated, cannot decrypt messages');
+      callback(snapshot);
+      return;
+    }
+    
+    // Get encryption key for this conversation
+    let encryptionKey = null;
+    try {
+      encryptionKey = await getConversationKey(conversationId, uid);
+    } catch (error) {
+      console.warn('⚠️ Could not get encryption key:', error);
+    }
+    
+    // Decrypt messages if encrypted
+    const decryptedDocs = await Promise.all(
+      snapshot.docs.map(async (docSnap) => {
+        const data = docSnap.data();
+        
+        // If message is encrypted and we have a key, decrypt it
+        if (data.encrypted && data.encryptedText && encryptionKey) {
+          try {
+            const decryptedText = await decryptMessage(data.encryptedText, encryptionKey);
+            // Return document with decrypted text (preserve all original properties)
+            return {
+              id: docSnap.id,
+              ref: docSnap.ref,
+              data: () => ({
+                ...data,
+                text: decryptedText,
+                encrypted: true, // Keep flag for UI
+              }),
+              exists: docSnap.exists,
+              metadata: docSnap.metadata,
+            };
+          } catch (error) {
+            console.error('❌ Error decrypting message:', error);
+            // Return document with error message
+            return {
+              id: docSnap.id,
+              ref: docSnap.ref,
+              data: () => ({
+                ...data,
+                text: '[Unable to decrypt message]',
+                decryptionError: true,
+              }),
+              exists: docSnap.exists,
+              metadata: docSnap.metadata,
+            };
+          }
+        }
+        
+        // Return document as-is (not encrypted or no key available - old messages)
+        // Old messages are plain text, so they display correctly
+        return docSnap;
+      })
+    );
+    
+    // Create a new snapshot-like object with decrypted docs
+    const decryptedSnapshot = {
+      docs: decryptedDocs,
+      size: snapshot.size,
+      empty: snapshot.empty,
+      metadata: snapshot.metadata,
+      query: snapshot.query,
+    };
     
     // Log first and last message timestamps for debugging
     if (messageCount > 0) {
@@ -224,7 +358,7 @@ export function listenLatestMessages(conversationId, callback, pageSize = 500) {
       console.log(`📅 Message time range: ${lastTime} (oldest) to ${firstTime} (newest)`);
     }
     
-    callback(snapshot);
+    callback(decryptedSnapshot);
   }, (error) => {
     console.error('❌ Messages listener error for conversation:', conversationId, error);
     console.error('Error code:', error.code);
@@ -258,19 +392,49 @@ export async function sendMessage(conversationId, authorId, text, meta = {}) {
     await setDoc(convRef, { updatedAt: serverTimestamp() }, { merge: true });
   }
 
+  // Ensure conversation has encryption key
+  const encryptionKey = await ensureConversationKey(conversationId, uid);
+  
+  // Encrypt the message text
+  let encryptedData = null;
+  let messageText = text;
+  let isEncrypted = false;
+  
+  try {
+    encryptedData = await encryptMessage(text, encryptionKey);
+    isEncrypted = true;
+    // Don't store plain text when encrypted
+    messageText = null;
+  } catch (error) {
+    console.error('Error encrypting message, storing as plain text:', error);
+    // Fallback: store as plain text if encryption fails
+    isEncrypted = false;
+  }
+
   // Add the message
-  await addDoc(collection(convRef, 'messages'), {
-    text,
+  const messageData = {
     authorId: authorId || uid,
     uid: uid,
     createdAt: serverTimestamp(),
     status: "sent",
+    encrypted: isEncrypted,
     ...(meta && Object.keys(meta).length > 0 ? { meta } : {})
-  });
+  };
   
-  // Update conversation last message
+  // Store encrypted or plain text based on encryption success
+  if (isEncrypted && encryptedData) {
+    messageData.encryptedText = encryptedData;
+    // Store a placeholder for lastMessage (can't decrypt in rules)
+    messageData.text = '[Encrypted]';
+  } else {
+    messageData.text = text;
+  }
+  
+  await addDoc(collection(convRef, 'messages'), messageData);
+  
+  // Update conversation last message (use placeholder for encrypted messages)
   await updateDoc(convRef, {
-    lastMessage: text,
+    lastMessage: isEncrypted ? '[Encrypted message]' : text,
     updatedAt: serverTimestamp()
   });
 }

@@ -18,6 +18,13 @@ service cloud.firestore {
       return request.auth != null && getConversationMembers(convId).hasAny([request.auth.uid]);
     }
 
+    function isAdmin() {
+      return request.auth != null && (
+        request.auth.token.email == 'disopate@hotmail.com' ||
+        request.auth.token.email == 'disopate@icloud.com'
+      );
+    }
+
     match /conversations/{conversationId} {
       // Allow list queries (where clause handles filtering)
       allow list:   if request.auth != null;
@@ -84,14 +91,17 @@ service cloud.firestore {
       }
 
       function validMessageCreate() {
-        return request.resource.data.keys().hasOnly(["text","authorId","createdAt","status","meta","uid"])
+        return request.resource.data.keys().hasOnly(["text","authorId","createdAt","status","meta","uid","encrypted","encryptedText"])
           && request.resource.data.uid == request.auth.uid
           && (
             request.resource.data.authorId == request.auth.uid
             || request.resource.data.authorId == "assistant"
           )
-          && request.resource.data.text is string
-          && request.resource.data.text.size() > 0
+          && (
+            // Either plain text (for backward compatibility) or encrypted
+            (request.resource.data.text is string && request.resource.data.text.size() > 0)
+            || (request.resource.data.encrypted == true && request.resource.data.encryptedText is map)
+          )
           && request.resource.data.status in ["sending","sent","error"];
       }
 
@@ -111,7 +121,7 @@ service cloud.firestore {
 
     // Email inbox collection - admin only
     match /email_inbox/{document} {
-      allow read, write: if request.auth != null;
+      allow read, write: if isAdmin();
     }
 
     // Email campaigns collection - allow public writes for tracking
