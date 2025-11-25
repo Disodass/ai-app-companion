@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Resend Webhook Handler</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+    <h1>Resend Webhook Handler</h1>
+    <p>This endpoint receives incoming emails from Resend and processes them.</p>
+    
+    <script>
+        // This is a placeholder for the webhook endpoint
+        // In production, this would be a proper server-side endpoint
+        
+        console.log('📧 Webhook handler loaded');
+        
+        // Handle incoming webhook data
+        function handleWebhook(data) {
+            console.log('📧 Received webhook data:', data);
+            
+            // Process the email data
+            const emailData = {
+                messageId: data.message_id || data.id,
+                subject: data.subject || 'No Subject',
+                from: data.from || data.sender,
+                to: data.to || data.recipient,
+                replyTo: data.reply_to || data.from,
+                date: data.date ? new Date(data.date) : new Date(),
+                textContent: data.text || data.text_content || '',
+                htmlContent: data.html || data.html_content || '',
+                priority: 'normal',
+                labels: ['incoming'],
+                rawData: data
+            };
+            
+            // Save to inbox (this would call your inbox service)
+            console.log('📬 Processing email:', emailData.subject);
+            
+            // For now, just log the data
+            console.log('✅ Email processed:', emailData);
+            
+            return {
+                success: true,
+                message: 'Email processed successfully',
+                emailId: `email_${Date.now()}`
+            };
+        }
+        
+        // Export the handler function for use by the webhook
+        window.handleWebhook = handleWebhook;
+    </script>
+</body>
+</html>
+

@@ -1,0 +1,102 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Reset any default margins/padding that might cause top spacing */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow-x: hidden;
+}
+
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* Brand tokens */
+:root{
+  --brand-primary:#8B4513;
+  --brand-secondary:#D2691E;
+  --brand-accent:#CD853F;
+  --brand-light:#F5DEB3;
+  --brand-dark:#654321;
+}
+
+/* Light theme (default) */
+:root, html.light {
+  --bg-primary:#FAF7EF;
+  --bg-secondary:#F5F5DC;
+  --bg-surface:#FFF8DC;
+  --bg-card:#FFFFFF;
+  --text-primary:#2F2F2F;
+  --text-secondary:#696969;
+  --text-muted:#A0A0A0;
+  --border-primary:#DEB887;
+  --border-secondary:#D2B48C;
+  --shadow-primary:rgba(139,69,19,.10);
+  --shadow-secondary:rgba(139,69,19,.15);
+}
+
+/* Dark theme */
+html.dark {
+  --bg-primary:#0f0e0c;
+  --bg-secondary:#12110f;
+  --bg-surface:#161513;
+  --bg-card:#1b1917;
+  --text-primary:#EDE9E3;
+  --text-secondary:#C9C3B8;
+  --text-muted:#A49E93;
+  --border-primary:#2a2724;
+  --border-secondary:#36322E;
+  --shadow-primary:rgba(0,0,0,.35);
+  --shadow-secondary:rgba(0,0,0,.55);
+}
+
+/* Utility bridge */
+.bg-theme-primary{background-color:var(--bg-primary)}
+.bg-theme-secondary{background-color:var(--bg-secondary)}
+.bg-theme-surface{background-color:var(--bg-surface)}
+.bg-theme-card{background-color:var(--bg-card)}
+.text-theme-text{color:var(--text-primary)}
+.text-theme-text-secondary{color:var(--text-secondary)}
+.text-theme-text-muted{color:var(--text-muted)}
+.border-theme-border{border-color:var(--border-primary)}
+.shadow-theme-primary{box-shadow:0 4px 16px var(--shadow-primary)}
+.shadow-theme-secondary{box-shadow:0 8px 32px var(--shadow-secondary)}
+
+.btn-brand-primary{background:var(--brand-primary);color:white;border:1px solid var(--brand-primary)}
+.btn-brand-secondary{background:transparent;color:var(--brand-primary);border:1px solid var(--brand-primary)}
+.input-theme{background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary)}
+.input-theme::placeholder{color:var(--text-muted)}
+
+/* Custom scrollbar styling */
+.overflow-y-auto {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-primary) transparent;
+}
+
+.overflow-y-auto::-webkit-scrollbar {
+  width: 8px;
+}
+
+.overflow-y-auto::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.overflow-y-auto::-webkit-scrollbar-thumb {
+  background-color: var(--border-primary);
+  border-radius: 4px;
+}
+
+.overflow-y-auto::-webkit-scrollbar-thumb:hover {
+  background-color: var(--border-secondary);
+}

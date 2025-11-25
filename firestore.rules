@@ -1,0 +1,124 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwnerDM(convId) {
+      return request.auth != null &&
+        (convId == "dm_" + request.auth.uid || convId == "dm__" + request.auth.uid);
+    }
+
+    function getConversationMembers(convId) {
+      let conversation = get(/databases/$(database)/documents/conversations/$(convId));
+      return conversation != null && conversation.data != null && conversation.data.members is list
+        ? conversation.data.members
+        : [];
+    }
+
+    function isMember(convId) {
+      return request.auth != null && getConversationMembers(convId).hasAny([request.auth.uid]);
+    }
+
+    match /conversations/{conversationId} {
+      // Allow list queries (where clause handles filtering)
+      allow list:   if request.auth != null;
+      // Allow get on specific docs only if member
+      allow get:    if isMemberConvDoc(conversationId);
+      allow create: if isOwnerDM(conversationId) || (request.auth != null && isValidConversationCreate());
+      allow update: if request.auth != null && isMemberConvDoc(conversationId) && isValidConversationUpdate();
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        // for message docs we must check the parent conversation
+        allow read:   if isMemberFromParent(conversationId);
+        allow create: if request.auth != null && isMemberFromParent(conversationId) && validMessageCreate();
+        allow update: if request.auth != null && isMemberFromParent(conversationId) && validMessageUpdate();
+        allow delete: if false;
+      }
+
+      match /presence/{userId} {
+        allow read:  if isMemberFromParent(conversationId);
+        allow write: if request.auth != null && request.auth.uid == userId && isMemberFromParent(conversationId);
+      }
+
+      match /summaries/{summaryId} {
+        allow read: if isMemberFromParent(conversationId);
+        allow create: if request.auth != null && isMemberFromParent(conversationId);
+        allow update, delete: if false; // Summaries are immutable once created
+      }
+
+      // ---- helpers ----
+      function isMemberConvDoc(conversationId) {
+        return request.auth != null
+          && (
+            // Legacy DM conversations
+            isOwnerDM(conversationId)
+            // Supporter conversations (supporter__{uid}__{supporterId})
+            || (conversationId.matches('supporter__' + request.auth.uid + '__.*'))
+            // Conversations with members array
+            || (resource != null && resource.data != null && resource.data.members is list
+                && resource.data.members.hasAny([request.auth.uid]))
+            // Legacy conversations - check if conversationId starts with dm_ and contains uid
+            || (conversationId.matches('dm_.*') 
+                && (conversationId == "dm_" + request.auth.uid || conversationId == "dm__" + request.auth.uid))
+          );
+      }
+      function isMemberFromParent(conversationId) {
+        return request.auth != null
+          && (isOwnerDM(conversationId) || isMember(conversationId));
+      }
+
+      function isValidConversationCreate() {
+        return request.resource.data.keys().hasOnly([
+          "createdAt","updatedAt","members","memberMeta","lastMessage","messageCount","supporterId"
+        ])
+        && request.resource.data.members is list
+        && request.resource.data.members.size() >= 1
+        && request.resource.data.members.size() <= 20
+        && request.resource.data.members.hasAny([request.auth.uid]);
+      }
+
+      function isValidConversationUpdate() {
+        return request.resource.data.diff(resource.data).changedKeys().hasOnly(
+          ["updatedAt","lastMessage","messageCount","memberMeta"]
+        );
+      }
+
+      function validMessageCreate() {
+        return request.resource.data.keys().hasOnly(["text","authorId","createdAt","status","meta","uid"])
+          && request.resource.data.uid == request.auth.uid
+          && (
+            request.resource.data.authorId == request.auth.uid
+            || request.resource.data.authorId == "assistant"
+          )
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.status in ["sending","sent","error"];
+      }
+
+      function validMessageUpdate() {
+        return request.resource.data.keys().hasOnly(["status"])
+          && resource.data.status == "sending"
+          && request.resource.data.status in ["sent","error"];
+      }
+    }
+
+    // Newsletter subscribers collection - allow public writes for subscription
+    match /newsletter_subscribers/{document} {
+      allow create: if true; // Allow anyone to subscribe
+      allow read: if request.auth != null; // Only authenticated users can read
+      allow update, delete: if request.auth != null; // Allow authenticated users to update/delete
+    }
+
+    // Email inbox collection - admin only
+    match /email_inbox/{document} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Email campaigns collection - allow public writes for tracking
+    match /email_campaigns/{document} {
+      allow create: if true; // Allow public creation for tracking
+      allow read: if request.auth != null; // Only authenticated users can read
+      allow update, delete: if request.auth != null; // Only authenticated users can update/delete
+    }
+  }
+}
