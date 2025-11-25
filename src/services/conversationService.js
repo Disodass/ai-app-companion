@@ -1,4 +1,4 @@
-import { collection, collectionGroup, query, where, orderBy, limit, onSnapshot, addDoc, doc, setDoc, serverTimestamp, updateDoc, getDocs, getDoc } from "firebase/firestore";
+import { collection, query, where, orderBy, limit, onSnapshot, addDoc, doc, setDoc, serverTimestamp, updateDoc, getDocs, getDoc } from "firebase/firestore";
 import { db, auth } from "../firebaseConfig";
 
 // Helper function to get message count efficiently (uses messageCount field if available, otherwise counts)
@@ -24,121 +24,41 @@ async function getMessageCount(conversationId, storedCount = null) {
   }
 }
 
+// Helper function to verify user is a member of a conversation
+async function verifyUserIsMember(conversationId, uid) {
+  try {
+    const convRef = doc(db, "conversations", conversationId);
+    const convSnap = await getDoc(convRef);
+    if (!convSnap.exists()) return false;
+    const data = convSnap.data();
+    return Array.isArray(data.members) && data.members.includes(uid);
+  } catch (error) {
+    console.warn(`⚠️ Could not verify membership for ${conversationId}:`, error.message);
+    return false;
+  }
+}
+
 // Find or create a conversation for a specific supporter
-// Since user is the only user, find conversation with MOST messages regardless of structure
+// CRITICAL: Only queries conversations where user is a member to ensure data isolation
 export async function findOrCreateSupporterConversation(uid, supporterId) {
-  console.log('🔍 Finding conversation with most messages (user is only user):', uid, 'supporter:', supporterId);
+  console.log('🔍 Finding conversation for user:', uid, 'with supporter:', supporterId);
   
   try {
-    // PRIMARY METHOD: Use collectionGroup to find ALL messages across ALL conversations
-    // This works regardless of conversation structure, ID format, or membership fields
-    console.log('📊 Searching ALL messages across ALL conversations using collectionGroup...');
+    // STEP 1: Query conversations where user is a member (CRITICAL: filters by user)
+    const conversationsQuery = query(
+      collection(db, "conversations"),
+      where("members", "array-contains", uid)
+    );
     
-    let conversationCounts = new Map(); // conversationId -> messageCount
+    const conversationsSnapshot = await getDocs(conversationsQuery);
+    console.log(`📋 Found ${conversationsSnapshot.size} conversations where user is a member`);
     
-    try {
-      // Get all messages from all conversations
-      const allMessagesQuery = query(collectionGroup(db, "messages"), limit(10000)); // Limit to prevent timeout
-      const allMessagesSnapshot = await getDocs(allMessagesQuery);
+    if (conversationsSnapshot.empty) {
+      // No conversations found - create new one
+      console.log('📋 No conversations found. Creating new conversation.');
+      const convId = `supporter__${uid}__${supporterId}`;
+      const convRef = doc(db, "conversations", convId);
       
-      console.log(`📥 Found ${allMessagesSnapshot.size} total messages across all conversations`);
-      
-      // Group messages by conversation ID (extract from document path)
-      for (const messageDoc of allMessagesSnapshot.docs) {
-        const pathParts = messageDoc.ref.path.split('/');
-        // Path format: conversations/{conversationId}/messages/{messageId}
-        if (pathParts.length >= 3 && pathParts[0] === 'conversations') {
-          const conversationId = pathParts[1];
-          conversationCounts.set(conversationId, (conversationCounts.get(conversationId) || 0) + 1);
-        }
-      }
-      
-      console.log(`📋 Found ${conversationCounts.size} unique conversations with messages`);
-      
-      // Convert to array and sort by message count
-      const conversations = Array.from(conversationCounts.entries())
-        .map(([id, count]) => ({ id, messageCount: count }))
-        .sort((a, b) => b.messageCount - a.messageCount);
-      
-      if (conversations.length > 0) {
-        const bestConv = conversations[0];
-        console.log(`✅ Found conversation with most messages: ${bestConv.id} (${bestConv.messageCount} messages)`);
-        
-        // Log all conversations found
-        console.log('📋 All conversations found:', conversations.map(c => `${c.id}: ${c.messageCount} messages`).join(', '));
-        
-        // If multiple conversations exist, mark others as deprecated
-        if (conversations.length > 1) {
-          console.log(`⚠️ Found ${conversations.length} conversations. Marking others as deprecated.`);
-          for (let i = 1; i < conversations.length; i++) {
-            const depConv = conversations[i];
-            try {
-              const depRef = doc(db, "conversations", depConv.id);
-              await updateDoc(depRef, {
-                deprecated: true,
-                consolidatedInto: bestConv.id,
-                consolidatedAt: serverTimestamp()
-              });
-              console.log(`📋 Marked ${depConv.id} (${depConv.messageCount} messages) as deprecated`);
-            } catch (err) {
-              console.warn(`⚠️ Could not mark ${depConv.id} as deprecated:`, err.message);
-            }
-          }
-        }
-        
-        return { id: bestConv.id };
-      }
-    } catch (collectionGroupError) {
-      console.error('❌ collectionGroup search failed:', collectionGroupError);
-      console.error('Error code:', collectionGroupError.code);
-      console.error('Falling back to known ID format checks...');
-      
-      // FALLBACK: Check known conversation ID formats
-      const knownIds = [
-        `dm_${uid}`,
-        `dm__${uid}`,
-        `supporter__${uid}__ai-friend`,
-        `supporter__${uid}__supporter_friend`,
-      ];
-      
-      let bestConv = null;
-      let maxCount = 0;
-      
-      for (const convId of knownIds) {
-        try {
-          const convRef = doc(db, "conversations", convId);
-          const convSnap = await getDoc(convRef);
-          
-          if (convSnap.exists()) {
-            const data = convSnap.data();
-            const count = await getMessageCount(convId, data.messageCount);
-            
-            if (count > maxCount) {
-              maxCount = count;
-              bestConv = { id: convId, messageCount: count };
-            }
-            
-            console.log(`✅ Found conversation ${convId}: ${count} messages`);
-          }
-        } catch (err) {
-          console.warn(`⚠️ Error checking ${convId}:`, err.message);
-        }
-      }
-      
-      if (bestConv && bestConv.messageCount > 0) {
-        console.log(`✅ Selected conversation: ${bestConv.id} (${bestConv.messageCount} messages)`);
-        return { id: bestConv.id };
-      }
-    }
-    
-    // No conversations with messages found - create new one
-    console.log('📋 No existing conversations with messages found. Creating new conversation.');
-    const convId = `supporter__${uid}__${supporterId}`;
-    const convRef = doc(db, "conversations", convId);
-    const existing = await getDoc(convRef);
-    
-    if (!existing.exists()) {
-      console.log('🆕 Creating new supporter conversation:', convId);
       await setDoc(convRef, {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -159,14 +79,119 @@ export async function findOrCreateSupporterConversation(uid, supporterId) {
       });
       
       await updateDoc(convRef, { messageCount: 1 });
-    } else {
-      const existingData = existing.data();
-      const messageCount = existingData.messageCount || 0;
-      console.log('✅ Using existing supporter conversation:', convId, `(${messageCount} messages)`);
+      console.log('🎯 Created new conversation:', convId);
+      return { id: convId };
     }
     
-    console.log('🎯 Final conversation ID selected:', convId);
-    return { id: convId };
+    // STEP 2: Count messages for each conversation and verify user membership
+    const conversationsWithCounts = [];
+    
+    for (const convDoc of conversationsSnapshot.docs) {
+      const convId = convDoc.id;
+      const convData = convDoc.data();
+      
+      // Verify user is actually a member (double-check for security)
+      if (!Array.isArray(convData.members) || !convData.members.includes(uid)) {
+        console.warn(`⚠️ Skipping ${convId} - user not in members array`);
+        continue;
+      }
+      
+      // Count messages for this conversation
+      const messageCount = await getMessageCount(convId, convData.messageCount);
+      
+      conversationsWithCounts.push({
+        id: convId,
+        messageCount: messageCount,
+        supporterId: convData.supporterId,
+        data: convData
+      });
+      
+      console.log(`✅ Conversation ${convId}: ${messageCount} messages (supporterId: ${convData.supporterId || 'none'})`);
+    }
+    
+    if (conversationsWithCounts.length === 0) {
+      // No valid conversations found - create new one
+      console.log('📋 No valid conversations found. Creating new conversation.');
+      const convId = `supporter__${uid}__${supporterId}`;
+      const convRef = doc(db, "conversations", convId);
+      
+      await setDoc(convRef, {
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        members: [uid],
+        memberMeta: { [uid]: { lastReadAt: serverTimestamp() } },
+        lastMessage: null,
+        messageCount: 0,
+        supporterId: supporterId
+      });
+      
+      // Add welcome message
+      await addDoc(collection(db, "conversations", convId, "messages"), {
+        text: "Welcome to Bestibule 👋",
+        authorId: 'assistant',
+        createdAt: serverTimestamp(),
+        status: "sent",
+        meta: { role: "ai" }
+      });
+      
+      await updateDoc(convRef, { messageCount: 1 });
+      console.log('🎯 Created new conversation:', convId);
+      return { id: convId };
+    }
+    
+    // STEP 3: Filter by supporterId if specified, then sort by message count
+    let candidates = conversationsWithCounts;
+    
+    if (supporterId) {
+      // Prefer conversations matching the requested supporterId
+      const matchingSupporter = conversationsWithCounts.filter(c => 
+        c.supporterId === supporterId || c.id.includes(supporterId)
+      );
+      
+      if (matchingSupporter.length > 0) {
+        candidates = matchingSupporter;
+        console.log(`📋 Filtered to ${candidates.length} conversations matching supporterId: ${supporterId}`);
+      }
+    }
+    
+    // Sort by message count (descending) and return the one with most messages
+    candidates.sort((a, b) => b.messageCount - a.messageCount);
+    const bestConv = candidates[0];
+    
+    console.log(`✅ Selected conversation: ${bestConv.id} (${bestConv.messageCount} messages)`);
+    
+    // Log all conversations found for debugging
+    console.log('📋 All user conversations:', candidates.map(c => `${c.id}: ${c.messageCount} messages`).join(', '));
+    
+    // If multiple conversations exist, mark others as deprecated (only if they belong to same user)
+    if (candidates.length > 1) {
+      console.log(`⚠️ Found ${candidates.length} conversations. Marking others as deprecated.`);
+      for (let i = 1; i < candidates.length; i++) {
+        const depConv = candidates[i];
+        
+        // CRITICAL: Verify user is member before marking as deprecated
+        const isMember = await verifyUserIsMember(depConv.id, uid);
+        if (!isMember) {
+          console.warn(`⚠️ Skipping deprecation of ${depConv.id} - user is not a member`);
+          continue;
+        }
+        
+        try {
+          const depRef = doc(db, "conversations", depConv.id);
+          await updateDoc(depRef, {
+            deprecated: true,
+            consolidatedInto: bestConv.id,
+            consolidatedAt: serverTimestamp()
+          });
+          console.log(`📋 Marked ${depConv.id} (${depConv.messageCount} messages) as deprecated`);
+        } catch (err) {
+          console.warn(`⚠️ Could not mark ${depConv.id} as deprecated:`, err.message);
+        }
+      }
+    }
+    
+    console.log('🎯 Final conversation ID selected:', bestConv.id);
+    return { id: bestConv.id };
     
   } catch (error) {
     console.error('❌ Error in findOrCreateSupporterConversation:', error);
@@ -224,6 +249,11 @@ export async function sendMessage(conversationId, authorId, text, meta = {}) {
       updatedAt: serverTimestamp()
     }, { merge: true });
   } else {
+    // CRITICAL: Verify user is a member before allowing message send
+    const convData = snap.data();
+    if (!convData.members || !convData.members.includes(uid)) {
+      throw new Error('User is not a member of this conversation');
+    }
     // Update timestamp even if exists
     await setDoc(convRef, { updatedAt: serverTimestamp() }, { merge: true });
   }
