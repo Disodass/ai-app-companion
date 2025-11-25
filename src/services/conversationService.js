@@ -273,11 +273,92 @@ export function listenLatestMessages(conversationId, callback, pageSize = 500) {
   console.log('👂 Setting up listener for conversation:', conversationId, `(limit: ${pageSize} messages)`);
   
   const messagesRef = collection(db, "conversations", conversationId, "messages");
-  const q = query(messagesRef, orderBy("createdAt", "desc"), limit(pageSize));
   
-  return onSnapshot(q, async (snapshot) => {
+  // Try the indexed query first (faster, requires index)
+  const indexedQuery = query(messagesRef, orderBy("createdAt", "desc"), limit(pageSize));
+  
+  // Fallback query without orderBy (slower but works without index - we'll sort client-side)
+  // Get a larger batch to ensure we have enough after sorting (Firestore limit is 1000 per query)
+  const fallbackLimit = Math.min(pageSize * 3, 1000);
+  const fallbackQuery = query(messagesRef, limit(fallbackLimit));
+  
+  let unsubscribeIndexed = null;
+  let unsubscribeFallback = null;
+  let isUsingFallback = false;
+  
+  // Try indexed query first
+  unsubscribeIndexed = onSnapshot(indexedQuery, async (snapshot) => {
+    // Success - use this snapshot
+    if (!isUsingFallback) {
+      processSnapshot(snapshot, callback, conversationId);
+    }
+  }, async (error) => {
+    // Index error - fall back to unindexed query
+    if (error.code === 'failed-precondition' && error.message?.includes('index')) {
+      console.warn('⚠️ Index not ready, falling back to unindexed query:', error.message);
+      isUsingFallback = true;
+      
+      // Clean up indexed listener
+      if (unsubscribeIndexed) {
+        unsubscribeIndexed();
+        unsubscribeIndexed = null;
+      }
+      
+      // Use fallback query (no orderBy, no index needed)
+      unsubscribeFallback = onSnapshot(fallbackQuery, async (fallbackSnapshot) => {
+        // Sort client-side by createdAt descending
+        const sortedDocs = [...fallbackSnapshot.docs].sort((a, b) => {
+          const aTime = a.data().createdAt?.toMillis?.() || 0;
+          const bTime = b.data().createdAt?.toMillis?.() || 0;
+          return bTime - aTime; // Descending
+        }).slice(0, pageSize); // Limit to pageSize after sorting
+        
+        // Create a snapshot-like object with sorted docs
+        const sortedSnapshot = {
+          docs: sortedDocs,
+          size: sortedDocs.length,
+          empty: sortedDocs.length === 0,
+          metadata: fallbackSnapshot.metadata,
+          query: fallbackSnapshot.query,
+        };
+        
+        processSnapshot(sortedSnapshot, callback, conversationId);
+      }, (fallbackError) => {
+        console.error('❌ Fallback query also failed:', fallbackError);
+        // Last resort - return empty snapshot
+        callback({
+          docs: [],
+          size: 0,
+          empty: true,
+          metadata: {},
+          query: null,
+          error: fallbackError
+        });
+      });
+    } else {
+      // Other error - pass through
+      console.error('❌ Messages listener error for conversation:', conversationId, error);
+      callback({
+        docs: [],
+        size: 0,
+        empty: true,
+        metadata: {},
+        query: null,
+        error: error
+      });
+    }
+  });
+  
+  // Return cleanup function
+  return () => {
+    if (unsubscribeIndexed) unsubscribeIndexed();
+    if (unsubscribeFallback) unsubscribeFallback();
+  };
+}
+
+// Helper function to process snapshot (decrypt, etc.)
+async function processSnapshot(snapshot, callback, conversationId) {
     const messageCount = snapshot.docs.length;
-    const hasMore = messageCount >= pageSize;
     console.log(`📥 Snapshot received: ${messageCount} messages${hasMore ? ` (may have more, limit reached)` : ''} from conversation: ${conversationId}`);
     console.log(`📥 Snapshot details: empty=${snapshot.empty}, size=${snapshot.size}, docs.length=${snapshot.docs?.length}`);
     
@@ -357,43 +438,97 @@ export function listenLatestMessages(conversationId, callback, pageSize = 500) {
       query: snapshot.query,
     };
     
-    // Log first and last message timestamps for debugging
-    if (messageCount > 0) {
-      const firstMsg = snapshot.docs[0].data();
-      const lastMsg = snapshot.docs[messageCount - 1].data();
-      const firstTime = firstMsg.createdAt?.toDate?.() || 'unknown';
-      const lastTime = lastMsg.createdAt?.toDate?.() || 'unknown';
-      console.log(`📅 Message time range: ${lastTime} (oldest) to ${firstTime} (newest)`);
-    }
-    
-    callback(decryptedSnapshot);
-  }, (error) => {
-    console.error('❌ Messages listener error for conversation:', conversationId, error);
-    console.error('Error code:', error.code);
-    console.error('Error message:', error.message);
-    console.error('Error details:', {
-      code: error.code,
-      message: error.message,
-      stack: error.stack
-    });
-    
-    // If it's a missing index error, provide helpful message
-    if (error.code === 'failed-precondition') {
-      console.error('⚠️ Firestore index missing! You may need to create an index for:');
-      console.error('   Collection: conversations/{conversationId}/messages');
-      console.error('   Fields: createdAt (descending)');
-    }
-    
-    // Call callback with empty snapshot-like object to indicate error
-    callback({
-      docs: [],
-      size: 0,
-      empty: true,
-      error: error,
-      metadata: {},
-      query: null
-    });
-  });
+  const messageCount = snapshot.docs.length;
+  const hasMore = messageCount >= pageSize;
+  console.log(`📥 Snapshot received: ${messageCount} messages${hasMore ? ` (may have more, limit reached)` : ''} from conversation: ${conversationId}`);
+  console.log(`📥 Snapshot details: empty=${snapshot.empty}, size=${snapshot.size}, docs.length=${snapshot.docs?.length}`);
+  
+  // Get current user ID for decryption
+  const uid = auth.currentUser?.uid;
+  if (!uid) {
+    console.warn('⚠️ No user authenticated, cannot decrypt messages');
+    callback(snapshot);
+    return;
+  }
+  
+  // If snapshot is empty, still call callback with empty snapshot
+  if (snapshot.empty || messageCount === 0) {
+    console.log('📭 Empty snapshot - no messages found in conversation:', conversationId);
+    callback(snapshot);
+    return;
+  }
+  
+  // Get encryption key for this conversation
+  let encryptionKey = null;
+  try {
+    encryptionKey = await getConversationKey(conversationId, uid);
+  } catch (error) {
+    console.warn('⚠️ Could not get encryption key:', error);
+  }
+  
+  // Decrypt messages if encrypted
+  const decryptedDocs = await Promise.all(
+    snapshot.docs.map(async (docSnap) => {
+      const data = docSnap.data();
+      
+      // If message is encrypted and we have a key, decrypt it
+      if (data.encrypted && data.encryptedText && encryptionKey) {
+        try {
+          const decryptedText = await decryptMessage(data.encryptedText, encryptionKey);
+          // Return document with decrypted text (preserve all original properties)
+          return {
+            id: docSnap.id,
+            ref: docSnap.ref,
+            data: () => ({
+              ...data,
+              text: decryptedText,
+              encrypted: true, // Keep flag for UI
+            }),
+            exists: docSnap.exists,
+            metadata: docSnap.metadata,
+          };
+        } catch (error) {
+          console.error('❌ Error decrypting message:', error);
+          // Return document with error message
+          return {
+            id: docSnap.id,
+            ref: docSnap.ref,
+            data: () => ({
+              ...data,
+              text: '[Unable to decrypt message]',
+              decryptionError: true,
+            }),
+            exists: docSnap.exists,
+            metadata: docSnap.metadata,
+          };
+        }
+      }
+      
+      // Return document as-is (not encrypted or no key available - old messages)
+      // Old messages are plain text, so they display correctly
+      return docSnap;
+    })
+  );
+  
+  // Create a new snapshot-like object with decrypted docs
+  const decryptedSnapshot = {
+    docs: decryptedDocs,
+    size: snapshot.size,
+    empty: snapshot.empty,
+    metadata: snapshot.metadata,
+    query: snapshot.query,
+  };
+  
+  // Log first and last message timestamps for debugging
+  if (messageCount > 0) {
+    const firstMsg = snapshot.docs[0].data();
+    const lastMsg = snapshot.docs[messageCount - 1].data();
+    const firstTime = firstMsg.createdAt?.toDate?.() || 'unknown';
+    const lastTime = lastMsg.createdAt?.toDate?.() || 'unknown';
+    console.log(`📅 Message time range: ${lastTime} (oldest) to ${firstTime} (newest)`);
+  }
+  
+  callback(decryptedSnapshot);
 }
 
 export async function sendMessage(conversationId, authorId, text, meta = {}) {
