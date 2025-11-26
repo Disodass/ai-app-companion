@@ -290,12 +290,22 @@ export function listenLatestMessages(conversationId, callback, pageSize = 500) {
   unsubscribeIndexed = onSnapshot(indexedQuery, async (snapshot) => {
     // Success - use this snapshot
     if (!isUsingFallback) {
-      processSnapshot(snapshot, callback, conversationId);
+      processSnapshot(snapshot, callback, conversationId, pageSize);
     }
   }, async (error) => {
     // Index error - fall back to unindexed query
-    if (error.code === 'failed-precondition' && error.message?.includes('index')) {
-      console.warn('⚠️ Index not ready, falling back to unindexed query:', error.message);
+    // Check for various index-related error codes and messages
+    const isIndexError = 
+      error.code === 'failed-precondition' || 
+      error.code === 'unavailable' ||
+      (error.message && (
+        error.message.includes('index') || 
+        error.message.includes('Index') ||
+        error.message.includes('requires an index')
+      ));
+    
+    if (isIndexError) {
+      console.warn('⚠️ Index issue detected, falling back to unindexed query:', error.message || error.code);
       isUsingFallback = true;
       
       // Clean up indexed listener
@@ -322,7 +332,7 @@ export function listenLatestMessages(conversationId, callback, pageSize = 500) {
           query: fallbackSnapshot.query,
         };
         
-        processSnapshot(sortedSnapshot, callback, conversationId);
+        processSnapshot(sortedSnapshot, callback, conversationId, pageSize);
       }, (fallbackError) => {
         console.error('❌ Fallback query also failed:', fallbackError);
         // Last resort - return empty snapshot
@@ -357,87 +367,7 @@ export function listenLatestMessages(conversationId, callback, pageSize = 500) {
 }
 
 // Helper function to process snapshot (decrypt, etc.)
-async function processSnapshot(snapshot, callback, conversationId) {
-    const messageCount = snapshot.docs.length;
-    console.log(`📥 Snapshot received: ${messageCount} messages${hasMore ? ` (may have more, limit reached)` : ''} from conversation: ${conversationId}`);
-    console.log(`📥 Snapshot details: empty=${snapshot.empty}, size=${snapshot.size}, docs.length=${snapshot.docs?.length}`);
-    
-    // Get current user ID for decryption
-    const uid = auth.currentUser?.uid;
-    if (!uid) {
-      console.warn('⚠️ No user authenticated, cannot decrypt messages');
-      callback(snapshot);
-      return;
-    }
-    
-    // If snapshot is empty, still call callback with empty snapshot
-    if (snapshot.empty || messageCount === 0) {
-      console.log('📭 Empty snapshot - no messages found in conversation:', conversationId);
-      callback(snapshot);
-      return;
-    }
-    
-    // Get encryption key for this conversation
-    let encryptionKey = null;
-    try {
-      encryptionKey = await getConversationKey(conversationId, uid);
-    } catch (error) {
-      console.warn('⚠️ Could not get encryption key:', error);
-    }
-    
-    // Decrypt messages if encrypted
-    const decryptedDocs = await Promise.all(
-      snapshot.docs.map(async (docSnap) => {
-        const data = docSnap.data();
-        
-        // If message is encrypted and we have a key, decrypt it
-        if (data.encrypted && data.encryptedText && encryptionKey) {
-          try {
-            const decryptedText = await decryptMessage(data.encryptedText, encryptionKey);
-            // Return document with decrypted text (preserve all original properties)
-            return {
-              id: docSnap.id,
-              ref: docSnap.ref,
-              data: () => ({
-                ...data,
-                text: decryptedText,
-                encrypted: true, // Keep flag for UI
-              }),
-              exists: docSnap.exists,
-              metadata: docSnap.metadata,
-            };
-          } catch (error) {
-            console.error('❌ Error decrypting message:', error);
-            // Return document with error message
-            return {
-              id: docSnap.id,
-              ref: docSnap.ref,
-              data: () => ({
-                ...data,
-                text: '[Unable to decrypt message]',
-                decryptionError: true,
-              }),
-              exists: docSnap.exists,
-              metadata: docSnap.metadata,
-            };
-          }
-        }
-        
-        // Return document as-is (not encrypted or no key available - old messages)
-        // Old messages are plain text, so they display correctly
-        return docSnap;
-      })
-    );
-    
-    // Create a new snapshot-like object with decrypted docs
-    const decryptedSnapshot = {
-      docs: decryptedDocs,
-      size: snapshot.size,
-      empty: snapshot.empty,
-      metadata: snapshot.metadata,
-      query: snapshot.query,
-    };
-    
+async function processSnapshot(snapshot, callback, conversationId, pageSize = 500) {
   const messageCount = snapshot.docs.length;
   const hasMore = messageCount >= pageSize;
   console.log(`📥 Snapshot received: ${messageCount} messages${hasMore ? ` (may have more, limit reached)` : ''} from conversation: ${conversationId}`);
