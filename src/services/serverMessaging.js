@@ -1,6 +1,7 @@
 import { generateSupporterPrompt } from './supporterPrompts';
 import { getAiReply } from './aiReplyService';
 import { getSummaryContext } from './conversationSummaryService';
+import { getConversationMemory, getUserMemory } from './memoryService';
 import { isCrisisMessage, generateCrisisResponse, analyzeCrisisLevel } from './crisisService';
 import { getSupporterById } from '../data/supporters';
 
@@ -34,7 +35,21 @@ export async function generateAndSendAiMessageServer(conversationId, prompt, his
   inFlight = new AbortController();
 
   // Normalize history -> OpenAI/Groq format WITHOUT duplicating the last user turn
-  const norm = (history || []).map(m => ({
+  // First, ensure history is sorted chronologically (oldest to newest) by timestamp
+  const sortedHistory = (history || []).slice().sort((a, b) => {
+    const timeA = a.timestamp?.getTime?.() || a.createdAt?.toMillis?.() || a.timestamp || 0;
+    const timeB = b.timestamp?.getTime?.() || b.createdAt?.toMillis?.() || b.timestamp || 0;
+    return timeA - timeB; // Ascending order (oldest first)
+  });
+  
+  console.log(`📚 History: ${history?.length || 0} messages, sorted to ${sortedHistory.length} messages`);
+  if (sortedHistory.length > 0) {
+    const firstTime = sortedHistory[0].timestamp?.toISOString?.() || sortedHistory[0].createdAt?.toDate?.()?.toISOString() || 'unknown';
+    const lastTime = sortedHistory[sortedHistory.length - 1].timestamp?.toISOString?.() || sortedHistory[sortedHistory.length - 1].createdAt?.toDate?.()?.toISOString() || 'unknown';
+    console.log(`📅 History time range: ${firstTime} (oldest) to ${lastTime} (newest)`);
+  }
+  
+  const norm = sortedHistory.map(m => ({
     role: (m.authorId === 'assistant' || m.meta?.role === 'ai') ? 'assistant' : 'user',
     content: m.text || ''
   })).filter(m => m.content?.trim());
@@ -43,7 +58,44 @@ export async function generateAndSendAiMessageServer(conversationId, prompt, his
   const last = norm.at(-1);
   const sameLast = last && last.role === 'user' && last.content.trim() === prompt.trim();
   
-  // Get summary context for long-term memory (non-blocking, fallback to empty string)
+  // Load memory (fast access + user memory)
+  let memoryContext = '';
+  try {
+    // Load conversation memory (fast access)
+    const conversationMemory = await getConversationMemory(conversationId);
+    
+    // Load user memory (global facts/preferences)
+    const userMemory = userId ? await getUserMemory(userId) : null;
+    
+    // Build memory context string
+    if (conversationMemory) {
+      memoryContext += `\n\n## Conversation Memory\n`;
+      if (conversationMemory.keyFacts?.length > 0) {
+        memoryContext += `Key Facts: ${conversationMemory.keyFacts.join('; ')}\n`;
+      }
+      if (conversationMemory.preferences?.length > 0) {
+        memoryContext += `User Preferences: ${conversationMemory.preferences.join(', ')}\n`;
+      }
+      if (conversationMemory.keyThemes?.length > 0) {
+        memoryContext += `Key Themes: ${conversationMemory.keyThemes.join(', ')}\n`;
+      }
+    }
+    
+    if (userMemory) {
+      memoryContext += `\n## User Profile Memory\n`;
+      if (userMemory.globalFacts?.length > 0) {
+        memoryContext += `About User: ${userMemory.globalFacts.slice(0, 5).join('; ')}\n`;
+      }
+      if (userMemory.preferences?.length > 0) {
+        memoryContext += `General Preferences: ${userMemory.preferences.slice(0, 5).join(', ')}\n`;
+      }
+    }
+  } catch (error) {
+    console.warn('Failed to load memory context:', error);
+    // Continue without memory if it fails to load
+  }
+  
+  // Get summary context for long-term memory (detailed summaries)
   let summaryContext = '';
   try {
     summaryContext = await getSummaryContext(conversationId, 3);
@@ -52,10 +104,15 @@ export async function generateAndSendAiMessageServer(conversationId, prompt, his
     // Continue without summaries if they fail to load
   }
   
-  // Generate supporter-specific system prompt, enhanced with summary context
+  // Generate supporter-specific system prompt, enhanced with memory and summary context
   let systemPrompt = generateSupporterPrompt(supporterId);
+  
+  if (memoryContext) {
+    systemPrompt += memoryContext;
+  }
+  
   if (summaryContext) {
-    systemPrompt += `\n\n## Previous Conversation Context\n${summaryContext}\n\nUse this context to maintain continuity and remember important details from past conversations.`;
+    systemPrompt += `\n\n## Previous Conversation Summaries\n${summaryContext}\n\nUse this context to maintain continuity and remember important details from past conversations.`;
   }
   
   // For Supporter Friend, add identity reminder

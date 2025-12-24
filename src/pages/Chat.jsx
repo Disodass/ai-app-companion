@@ -11,6 +11,7 @@ import {
   markConversationRead
 } from "../services/conversationService";
 import { getSupporterById, AI_FRIEND } from '../data/supporters';
+import { loadConversationMemory, getUserMemory } from '../services/memoryService';
 
 export default function Chat() {
   const { user } = useAuth();
@@ -52,24 +53,46 @@ export default function Chat() {
     }
 
     let isMounted = true;
+    let currentConversationId = null; // Track which conversation we're using
 
     (async () => {
       try {
-        // Clean up previous listener
-        if (unsubRef.current) {
-          console.log('🧹 Cleaning up previous listener');
-          unsubRef.current();
-          unsubRef.current = null;
-        }
-
-        // Find or create conversation
+        // Find or create conversation FIRST (before cleaning up listener)
+        // This prevents race conditions where we clean up and then find a different conversation
         console.log('🔍 Finding or creating supporter conversation for user:', user.uid, 'with supporter:', supporterId);
         const { id } = await findOrCreateSupporterConversation(user.uid, supporterId);
         const conversationId = id;
+        currentConversationId = conversationId;
         console.log('✅ Using conversation:', conversationId);
+        
+        // Load user memory (global facts/preferences)
+        try {
+          const userMemory = await getUserMemory(user.uid);
+          console.log('📚 Loaded user memory:', userMemory);
+        } catch (error) {
+          console.warn('⚠️ Could not load user memory:', error);
+        }
+        
+        // Load conversation memory (fast access + summaries)
+        try {
+          const conversationMemory = await loadConversationMemory(conversationId);
+          console.log('📚 Loaded conversation memory:', conversationMemory);
+        } catch (error) {
+          console.warn('⚠️ Could not load conversation memory:', error);
+        }
         
         if (!isMounted) {
           console.log('⚠️ Component unmounted, aborting');
+          return;
+        }
+        
+        // Only clean up if we're switching to a different conversation
+        if (unsubRef.current && convId !== conversationId) {
+          console.log(`🧹 Cleaning up previous listener (switching from ${convId} to ${conversationId})`);
+          unsubRef.current();
+          unsubRef.current = null;
+        } else if (unsubRef.current && convId === conversationId) {
+          console.log(`✅ Already listening to conversation ${conversationId}, skipping setup`);
           return;
         }
         
